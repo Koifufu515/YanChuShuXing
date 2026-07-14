@@ -37,10 +37,12 @@ QueryRequest
 
 Streamlit 稳定性专项已完成：网页只使用项目根目录 `.venv`，结果表格不再经过 `st.dataframe` 的 Arrow 序列化路径，并在 Streamlit 导入前将 Arrow 内存池固定为系统分配器。详见 [Streamlit Segmentation Fault 排查记录](docs/Streamlit_Segmentation_Fault_Investigation.md)。
 
-## 首版交付
+## 当前文档
 
-- [项目完整方案](docs/项目完整方案.md)：项目定位、系统架构、指标体系、15 个问数场景、创新点、题目对比、四周计划与简历表述。
-- [数据库与指标字典](docs/数据库与指标字典.md)：10 张业务表、主外键、分析用途、七大主题指标口径。
+- [当前项目方案](docs/项目完整方案.md)：当前定位、系统架构、能力边界、可靠性、演示案例和后续方向。
+- [当前接口契约](docs/接口契约.md)：HTTP API、Metadata、内部应用模型、Ports 和错误契约。
+- [数据库与指标字典](docs/数据库与指标字典.md)：10张表、19项已登记指标、演示数据状态、Gold 问题和规划指标。
+- [仓库一致性审计报告](docs/仓库一致性审计报告.md)：当前事实基线、历史文档分类、删除清单、安全与验证结果。
 - `sql/schema.sql`：可在 SQLite 执行的数据库 DDL。
 - `config/metrics.yml`：机器可读的指标语义层首版。
 - `config/schema.yml`：表字段中文别名、关系和敏感级别首版。
@@ -150,8 +152,6 @@ tests/              # 自动化测试
 scripts/            # 稳定性和真实模型验证脚本
 docs/               # 架构、Sprint 记录与演示截图
 ```
-
-旧 `backend/app/models/query.py` 暂时保留用于兼容和审计参考，但不在当前生产链路中使用。
 
 ## 推荐技术栈
 

@@ -1,5 +1,8 @@
 # BankInsight Architecture Design Review
 
+> **文档类型：历史架构评审，不代表当前生产状态。**
+> 适用阶段：Sprint 2。推荐方案已在 Sprint 3 实施；当前架构与接口请以根目录 `README.md`、[当前接口契约](接口契约.md)和[仓库一致性审计报告](仓库一致性审计报告.md)为准。
+
 > 阶段：Sprint 2 工程架构设计评审
 > 日期：2026-07-12
 > 状态：设计建议，不代表已经实施
@@ -678,6 +681,10 @@ bankinsight_nl2sql/
 ### 对后续扩展
 
 项目可以从 Rule Generator + SQLite + Template Formatter 起步，逐步替换为 LLM Generator、更丰富的数据和智能解释。扩展发生在 Adapter，不要求重写 Pipeline。
+
+---
+
+**后续状态（2026-07-14）：** 推荐的轻量 Ports & Adapters 方案已实施。本文中的两种候选方案、旧目录和未来时描述只用于解释当时的架构决策，当前目录与接口请查阅 README 和当前接口契约。
 
 ## 十三、下一阶段的架构实施顺序建议
 

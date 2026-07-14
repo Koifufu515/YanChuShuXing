@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Repository audit
+
+- 以0.5.2实际代码为基准重写当前项目方案、接口契约和数据库指标字典，新增仓库一致性审计报告。
+- 将早期架构、Sprint 和故障文档统一标记为历史记录，并指向当前 README 与契约。
+- 移除无人引用的旧 Query Model、Pipeline 兼容转发、三份已完成的 Agent 计划和两张重复旧截图。
+- 将 Safety 内部报告模型归入当前 Safety 模块，并将 FastAPI OpenAPI 版本统一为0.5.2。
+- 校准 task plan、progress、README、19项指标状态、三条 Gold 问题和公开仓库状态。
+
 ### Repository
 
 - 整理适合团队协作的 GitHub 发布结构，补充贡献指南、安全说明和 Python 版本声明。

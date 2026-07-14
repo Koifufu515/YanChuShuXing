@@ -57,3 +57,21 @@
 - 正式文本未发现真实 API Key、Token、邮箱、身份证号或手机号；`.env` 必须继续只保留在本机。
 - README 已采用 Rule First、LLM Extension；旧 Sprint 文档中的 LLM First 是历史记录，不应篡改，但当前状态与任务计划必须明确以 Sprint 5.2 为准。
 - 为保证参赛项目安全，GitHub 仓库默认创建为 private，待团队确认后再决定是否公开及采用何种许可证。
+
+## 2026-07-14 全仓库一致性审计
+- 审计基线为 `main@3061a34`，工作区起始状态干净；远端为公开仓库 `Koifufu515/BankInsight`。
+- 当前生产入口为 `backend/app/main.py`，由 `bootstrap/container.py` 唯一组装 `application.pipeline.QueryPipeline` 与各 Adapter。
+- 当前 Hybrid 明确为 Rule First：`HybridSQLGenerator` 先调用 Rule，仅捕获 `RuleNotMatchedError` 后进入 LLM；LLM 的任何 `ApplicationError` 都携带 Metadata 返回，不再尝试 Rule。
+- Pipeline 只编排 Resolver、Generator、Safety、Executor、Formatter、Audit；所有 SQL 在执行前统一经过 Safety，执行器由 SQLite Adapter 提供。
+- 当前 Metadata 真实字段包括 `configured_mode`、`executed_generator`、`rule_matched`、`route`、`failure_reason`、`provider`、`model`、`llm_latency_ms`、`semantic` 和兼容字段 `fallback`。
+- `backend/app/services/pipeline.py` 仅重导出当前 Pipeline，属于旧导入兼容文件；`backend/app/models/query.py` 定义一套旧 Pydantic 领域模型，目前尚未发现生产代码引用，需要继续检查测试、文档和脚本后再决定删除。
+- 外部 HTTP DTO 位于 `api/schemas.py`，请求为 question/user_id/conversation_id，响应为 request_id/question/sql/columns/rows/summary/warnings/error/可选 metadata；`/api/v1/ask` 仅为隐藏 OpenAPI 的兼容别名。
+- DDL、`config/schema.yml` 与 SQLite 实库一致：均为10张表，所有字段集合一致，外键检查无违规。演示数据仅填充3名客户、3家分行、1名经理、4个账户和4笔交易；贷款、理财、渠道、风险表当前为空。
+- `config/metrics.yml` 共有19项已登记语义指标；其中当前端到端验证集中在有效客户数、账户余额上下文和交易四指标，其余指标属于“口径已登记但尚无完整演示数据/Gold 问题”的能力，旧字典未清楚区分。
+- 旧数据库字典还列出 AUM、流失率、存款集中度、复购率、综合经营得分和交易失败率等未进入 `metrics.yml` 的规划指标，必须移至明确的“规划项”而不能写作当前实现。
+- `backend/app/models/query.py` 只有 `SafetyFinding` 与 `SafetyReport` 仍被 `core/sql_safety.py` 使用，其余旧 Intent/Plan/Response 模型均无引用。适合把两个 Safety 内部模型移入当前 Safety 模块后删除旧文件。
+- `backend/app/services/pipeline.py` 在代码、测试和启动命令中均无引用，仅被历史文档提及，可删除并由 Git 历史保留其演进价值。
+- `docs/superpowers/plans/` 的三份 Agent 实施计划已被对应 Sprint 实施记录完整替代；旧 Sprint 4 两张页面截图也未被任何当前文档引用，适合删除并在审计报告记录替代文件。
+- `docs/工程审计与原型实施计划.md`、`Architecture_Design_Review.md` 具有架构演进价值，应保留但明确标记为历史记录；接口契约、数据库指标字典和项目方案应作为当前正式文档重写。
+- 应保留 `/api/v1/ask` 与 `fallback`：前者仍有兼容测试，后者仍被旧客户端和前端技术详情容错读取；二者都必须明确为兼容字段，不代表当前 Hybrid 会执行 LLM 到 Rule 的回退。
+- 产品页面版本为0.5.2，而 FastAPI OpenAPI 版本仍写0.1.0；这是当前版本标识不一致，宜统一为0.5.2，不改变 API 行为。

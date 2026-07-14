@@ -1,5 +1,8 @@
 # Streamlit Segmentation Fault 排查记录
 
+> **文档类型：历史故障排查记录。**
+> 修复仍是当前前端稳定性约束：保留 Arrow 系统内存池、安全 HTML 表格和纯数据 Session State。当前启动方式以根目录 `README.md` 为准。
+
 ## 结论
 
 本次崩溃不是普通 Python 异常，也不是 FastAPI、SQLite、DeepSeek 或业务 Pipeline 抛出的错误。6份 macOS Crash Report 均显示 Python 因 `EXC_BAD_ACCESS / SIGSEGV` 被系统终止，触发线程的共同调用链为：

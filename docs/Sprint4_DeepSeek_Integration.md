@@ -1,6 +1,7 @@
 # Sprint 4.2 DeepSeek 接入与规则回退
 
-> 历史说明：本文记录 Sprint 4.2 当时的 LLM First 实现。自 Sprint 5.2 起，当前系统已改为 **Rule First、LLM Extension**；LLM 失败后不再回退 Rule。当前行为以根目录 `README.md` 和最新代码为准。
+> **文档类型：历史实施记录，不代表当前路由。**
+> 本文记录 Sprint 4.2 当时的 LLM First 实现。自 Sprint 5.2 起，当前系统已改为 **Rule First、LLM Extension**；LLM 失败后不再回退 Rule。当前行为以根目录 `README.md` 和最新代码为准。
 
 ## 实施目标
 

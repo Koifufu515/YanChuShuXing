@@ -1,5 +1,8 @@
 # Sprint 5 Product Demo 重构记录
 
+> **文档类型：历史实施记录。**
+> 本文记录 Sprint 5 页面重构；后续 Sprint 5.1 增加场景选择器，Sprint 5.2 修改 Hybrid 路由。当前产品行为以根目录 `README.md` 和代码为准。
+
 ## 目标与边界
 
 本阶段只重构 Streamlit 产品体验，不增加后端能力。FastAPI、QueryPipeline、Rule/LLM/Hybrid Generator、SQL Safety、数据库结构、Demo 数据和 `/api/v1/query` 行为均保持不变。

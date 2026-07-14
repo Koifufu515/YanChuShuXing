@@ -36,7 +36,7 @@
 |--------|------|---------|---------|
 | - | 暂无 | 0 | - |
 
-## 五问重启检查
+## 当时的五问重启检查（历史）
 | 问题 | 答案 |
 |------|------|
 | 我在哪里？ | 初始框架已交付 |
@@ -48,7 +48,7 @@
 ## 会话：2026-07-12
 
 ### 阶段 6：工程审计与接口冻结
-- **状态：** in_progress
+- **状态：** complete
 - 执行的操作：恢复既有计划；逐个读取后端、配置、DDL、测试和前端目录；对比桌面与工作区核心文件哈希。
 - 范围限制：只产出工程审计、接口契约和运行证据；不实现 LLM、数据库执行器、网页或新 Pipeline。
 - 初步结论：DDL 和安全检查有真实逻辑；后端只有可导入骨架，查询接口依赖注入明确未配置；无 LLM、数据库执行器和网页。
@@ -73,7 +73,7 @@
 - 已确认：外部 HTTP API 使用 v1；内部使用 Architecture Review v2；SQLGenerator 与 LLMProvider 分离。
 - 执行策略：按纵向 TDD 切片实施，先固定问题真实查询，再补拒绝与错误路径。
 - 范围限制：不接真实 LLM、不做网页、RAG、向量检索、Agent、Docker 或完整权限审计。
-- 实施计划：`docs/superpowers/plans/2026-07-12-sprint3-minimal-vertical-prototype.md`。
+- Sprint 3 最小纵向原型按 TDD 切片实施；详细结果保留在 `docs/Sprint3_架构实施与最小原型记录.md`。
 - TDD 切片 1：架构契约测试先因 `app.application` 不存在失败；补充纯 dataclass、统一异常和7个独立 Ports 后通过。应用模型不依赖 FastAPI、Pydantic、SQLite、SQLGlot 或具体 Adapter。
 - TDD 切片 2：数据库初始化测试先因模块不存在失败；实现原子替换和固定小样本后通过，重复初始化不会累加数据。
 - TDD 切片 3：Executor 的参数化、限行、错误和只读测试先失败；实现只读 SQLite URI、`max_rows + 1`、类型转换与统一异常后3项通过。
@@ -174,8 +174,8 @@
 ## 会话：2026-07-14 GitHub 发布整理
 
 ### 阶段 14：仓库审计与发布准备
-- **状态：** in_progress
-- 当前目录尚未初始化 Git，未配置 remote；系统原先未安装 GitHub CLI。
+- **状态：** complete
+- 本阶段审计起始时目录尚未初始化 Git、未配置 remote，系统也未安装 GitHub CLI。
 - 根目录包含赛事附件、报名表、会议 PDF、Prompt 文档、Office 临时文件和本地 Playwright 输出，不适合直接提交，将移入被忽略的 `archive_local/`。
 - `.env` 含本地模型配置，保留在电脑且不得提交；`.env.example` 使用空密钥占位。
 - 文本密钥扫描未在正式代码与文档中发现真实 API Key、访问令牌、邮箱、身份证号或手机号。
@@ -191,5 +191,24 @@
 - 当前沙箱禁止监听本机新端口，因此本轮未重复启动 Uvicorn/Streamlit；此前真实启动与浏览器验收记录保留，当前代码以完整 TestClient 和前端契约测试复验。
 - 发布副本已创建独立 `.venv` 并按仓库依赖文件完成安装；`pip check`、Python 编译、数据库初始化和87项测试均在该环境通过。
 - GitHub CLI 2.96.0 已通过设备授权登录 `Koifufu515`，仓库提交身份使用 GitHub noreply 地址。
-- 已创建私有仓库 `https://github.com/Koifufu515/BankInsight`，并将 `main` 分支推送到 `origin/main`。
+- 已创建 GitHub 仓库 `https://github.com/Koifufu515/BankInsight`，推送 `main` 后按用户要求将可见性改为公开。
 - 首个提交为 `f3bda09 chore: prepare BankInsight repository for team collaboration`；远端未包含 `.env`、虚拟环境、本地归档或赛事附件。
+
+## 会话：2026-07-14 全仓库一致性审计
+
+### 阶段 15：文档校准与历史文件清理
+- **状态：** complete
+- 审计基线：`main` 分支，工作区干净，起始提交 `3061a34`，远端 `origin` 指向 `Koifufu515/BankInsight`。
+- 事实优先级：当前运行代码与测试 > 配置、DDL、数据库与 API 响应 > README 和历史文档。
+- 范围限制：不新增业务能力，不修改 Pipeline、Generator、Safety、数据库行为或页面功能；仅做一致性校准、无效内容清理和验证。
+- 当前事实：Rule First Hybrid、两阶段 LLM、统一 Safety、只读 SQLite、可选 Metadata 和 Ports & Adapters 均由代码与测试确认。
+- 数据事实：DDL、Schema YAML 与实库均为10张表；Metrics YAML 登记19项指标；演示数据只覆盖3名客户、4个账户和4笔交易。
+- 正式文档：重写当前项目方案、接口契约和数据库指标字典；README 增加审计报告入口。
+- 历史文档：Architecture Review、初始工程审计、Sprint 3/4/5 与 Streamlit 故障记录均增加适用版本和当前替代入口。
+- 代码清理：Safety 内部类型移入 `core/sql_safety.py`，删除无引用旧 Query Model 和 Pipeline 转发；FastAPI 版本统一为0.5.2。
+- 文件清理：删除3份已被实施记录替代的 Agent 计划和2张重复旧截图，Git 历史保留原内容。
+- 验证：项目 `.venv` 依赖检查、Python 编译、数据库初始化、外键检查和87项测试通过；DeepSeek Smoke 因无本地 Key 明确跳过。
+- 运行：更新后 `/health`、三条真实查询和 Streamlit 首页均启动成功，HTTP 状态分别为200。
+- 文档与安全：本地 Markdown 链接检查发现1处旧截图链接，已改为当前截图入口；当前文件和 Git 历史未发现密钥、绝对用户路径或禁止提交文件。
+- 过程错误：一次历史文档追加补丁因目标行文本不完全一致未应用；重新读取文件尾部后使用精确文本完成，没有产生部分修改。
+- 桌面同步：正式文件已同步到桌面 `农行杯金融科技`，保留本地 `.env`、`.venv` 和 `archive_local`；校验同步后两目录无内容差异。

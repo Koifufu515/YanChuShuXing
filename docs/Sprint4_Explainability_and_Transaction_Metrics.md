@@ -1,6 +1,7 @@
 # Sprint 4.3 查询链路可解释性与交易语义
 
-> 历史说明：本文记录 Sprint 4.3 当时的回退 Metadata。自 Sprint 5.2 起，Hybrid 已改为 **Rule First、LLM Extension**，新增 `rule_matched`、`route`、`failure_reason`，旧 `fallback` 仅为兼容保留。
+> **文档类型：历史实施记录，不代表当前路由。**
+> 本文记录 Sprint 4.3 当时的回退 Metadata。自 Sprint 5.2 起，Hybrid 已改为 **Rule First、LLM Extension**，新增 `rule_matched`、`route`、`failure_reason`，旧 `fallback` 仅为兼容保留。
 
 ## 实施目标
 
