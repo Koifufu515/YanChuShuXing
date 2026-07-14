@@ -126,9 +126,9 @@
 - [x] 整理发布版 README，并新增 CONTRIBUTING 与 SECURITY
 - [x] 修正文档中的当前阶段、Rule First Hybrid 和测试数量
 - [x] 完成编译、测试、数据库、TestClient API 和隐私验证
-- [ ] 初始化 Git 主分支并创建本地首个提交
-- [ ] 安装并授权 GitHub CLI，创建私有仓库并推送
-- **状态：** in_progress
+- [x] 初始化 Git 主分支并创建本地首个提交
+- [x] 安装并授权 GitHub CLI，创建私有仓库并推送
+- **状态：** complete
 
 ## 关键问题
 1. 如何避免项目沦为“套壳大模型生成 SQL”？
@@ -151,4 +151,4 @@
 | `/api/v1/ask` 返回 HTTP 500 | 1 | 已定位为占位 Provider 主动抛错；本阶段只记录，第二阶段实现 |
 
 ## 下一阶段
-- 当前先完成 GitHub 发布整理；代码和文档通过安全验证并推送私有团队仓库后，再评审《BankInsight Design Guideline》。
+- GitHub 发布整理已完成；下一步先从竞赛评委视角完成项目评审，再决定是否制定《BankInsight Design Guideline》或进入下一轮功能开发。

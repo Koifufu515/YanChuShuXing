@@ -190,3 +190,6 @@
 - 文本扫描未发现真实密钥、绝对用户路径、手机号或身份证号；仅 `.env.example` 占位符和测试用 `local-secret` 命中关键字扫描。
 - 当前沙箱禁止监听本机新端口，因此本轮未重复启动 Uvicorn/Streamlit；此前真实启动与浏览器验收记录保留，当前代码以完整 TestClient 和前端契约测试复验。
 - 发布副本已创建独立 `.venv`；依赖联网安装因 Codex 当前审批额度受限未完成，本轮测试使用同一项目此前已验证的 Python 3.10.11 环境执行，仓库安装命令保持可复现。
+- GitHub CLI 2.96.0 已通过设备授权登录 `Koifufu515`，仓库提交身份使用 GitHub noreply 地址。
+- 已创建私有仓库 `https://github.com/Koifufu515/BankInsight`，并将 `main` 分支推送到 `origin/main`。
+- 首个提交为 `f3bda09 chore: prepare BankInsight repository for team collaboration`；远端未包含 `.env`、虚拟环境、本地归档或赛事附件。
