@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
 
-from app.models.query import SafetyFinding, SafetyReport
+
+@dataclass(frozen=True)
+class SafetyFinding:
+    code: str
+    severity: Literal["info", "warning", "error"]
+    message: str
+
+
+@dataclass(frozen=True)
+class SafetyReport:
+    allowed: bool
+    findings: list[SafetyFinding] = field(default_factory=list)
+    referenced_tables: list[str] = field(default_factory=list)
+    referenced_columns: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

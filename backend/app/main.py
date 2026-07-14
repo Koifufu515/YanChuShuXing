@@ -6,7 +6,7 @@ from app.bootstrap.container import configure_dependencies
 
 app = FastAPI(
     title="BankInsight API",
-    version="0.1.0",
+    version="0.5.2",
     description="面向银行经营分析的智能问数与指标洞察 API",
 )
 app.include_router(query_router)

@@ -1,10 +1,13 @@
 # Sprint 4.1 产品化 Demo 实施记录
 
+> **文档类型：历史实施记录，不代表当前页面。**
+> 当前页面已经过 Sprint 5、5.1 重构；页面结构和能力以根目录 `README.md` 与 `docs/Sprint5_Product_Demo_Redesign.md` 为准。
+
 ## 页面整体结构
 
 页面采用单页工作台：顶部展示 BankInsight 名称和产品定位；中部提供三个示例问题、自然语言输入框和查询按钮；查询完成后依次展示生成 SQL、结果表格、业务解释与运行信息。Warning 使用黄色提示，Error 使用统一红色提示，不展示 Python Traceback 或数据库原始异常。
 
-![BankInsight Sprint 4.1 页面](assets/bankinsight-sprint4-product-demo.png)
+Sprint 4.1 的重复页面截图已在仓库清理时移除；当前页面效果见 [Sprint 5 首页截图](assets/bankinsight-sprint5-home.png)。原截图仍可从 Git 历史追溯。
 
 ## 技术选型
 
