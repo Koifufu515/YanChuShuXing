@@ -1,0 +1,40 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local tools, IDEs and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*.code-workspace
+.playwright-cli/
+
+# Runtime output and diagnostics
+output/
+logs/
+*.log
+*.crash
+*.ips
+
+# Local-only source material and generated artifacts
+archive_local/
+.codex/
+.claude/
+tmp/
+temp/
+~$*

@@ -1,0 +1,185 @@
+version: "0.1.0"
+dialect: sqlite
+tables:
+  branch_info:
+    name: 分行信息表
+    grain: 一行一分行
+    aliases: [机构表, 网点表, 分支机构]
+    primary_key: branch_id
+    columns:
+      branch_id: {name: 分行编号, type: TEXT, sensitivity: internal}
+      branch_name: {name: 分行名称, type: TEXT, sensitivity: internal}
+      branch_level: {name: 分行层级, type: TEXT, sensitivity: internal}
+      parent_branch_id: {name: 上级分行编号, type: TEXT, sensitivity: internal}
+      region_name: {name: 区域, type: TEXT, aliases: [大区], sensitivity: public}
+      province_name: {name: 省份, type: TEXT, sensitivity: public}
+      city_name: {name: 城市, type: TEXT, sensitivity: public}
+      open_date: {name: 开业日期, type: DATE, sensitivity: internal}
+      status: {name: 机构状态, type: TEXT, sensitivity: internal}
+
+  customer_manager:
+    name: 客户经理表
+    grain: 一行一客户经理
+    aliases: [经理表, 理财经理]
+    primary_key: manager_id
+    columns:
+      manager_id: {name: 客户经理编号, type: TEXT, sensitivity: confidential}
+      manager_name: {name: 客户经理姓名, type: TEXT, sensitivity: confidential, mask: name}
+      branch_id: {name: 所属分行编号, type: TEXT, sensitivity: internal}
+      hire_date: {name: 入职日期, type: DATE, sensitivity: confidential}
+      manager_level: {name: 客户经理等级, type: TEXT, sensitivity: internal}
+      status: {name: 在职状态, type: TEXT, sensitivity: internal}
+
+  customer_info:
+    name: 客户基础信息表
+    grain: 一行一客户
+    aliases: [客户表, 客户画像]
+    primary_key: customer_id
+    columns:
+      customer_id: {name: 客户编号, type: TEXT, sensitivity: restricted, mask: hash}
+      gender: {name: 性别, type: TEXT, sensitivity: confidential}
+      birth_year: {name: 出生年份, type: INTEGER, sensitivity: confidential}
+      province_name: {name: 所在省份, type: TEXT, sensitivity: confidential}
+      city_tier: {name: 城市等级, type: TEXT, sensitivity: internal}
+      occupation_type: {name: 职业类型, type: TEXT, sensitivity: confidential}
+      customer_level: {name: 客户等级, type: TEXT, aliases: [客户层级], sensitivity: confidential}
+      risk_preference: {name: 风险偏好, type: TEXT, sensitivity: restricted}
+      register_date: {name: 开户日期, type: DATE, sensitivity: confidential}
+      branch_id: {name: 归属分行编号, type: TEXT, sensitivity: internal}
+      manager_id: {name: 客户经理编号, type: TEXT, sensitivity: confidential}
+      customer_status: {name: 客户状态, type: TEXT, sensitivity: confidential}
+
+  account_info:
+    name: 账户信息表
+    grain: 一行一账户
+    aliases: [存款账户, 银行账户]
+    primary_key: account_id
+    columns:
+      account_id: {name: 账户编号, type: TEXT, sensitivity: restricted, mask: hash}
+      customer_id: {name: 客户编号, type: TEXT, sensitivity: restricted, mask: hash}
+      branch_id: {name: 开户分行编号, type: TEXT, sensitivity: internal}
+      account_type: {name: 账户类型, type: TEXT, sensitivity: confidential}
+      currency_code: {name: 币种, type: TEXT, sensitivity: internal}
+      open_date: {name: 开户日期, type: DATE, sensitivity: confidential}
+      close_date: {name: 销户日期, type: DATE, sensitivity: confidential}
+      current_balance: {name: 当前余额, type: NUMERIC, sensitivity: restricted}
+      account_status: {name: 账户状态, type: TEXT, sensitivity: restricted}
+
+  transaction_detail:
+    name: 交易流水表
+    grain: 一行一笔交易
+    aliases: [流水表, 交易明细]
+    primary_key: transaction_id
+    columns:
+      transaction_id: {name: 交易编号, type: TEXT, sensitivity: restricted, mask: hash}
+      account_id: {name: 账户编号, type: TEXT, sensitivity: restricted, mask: hash}
+      customer_id: {name: 客户编号, type: TEXT, sensitivity: restricted, mask: hash}
+      branch_id: {name: 交易归属分行, type: TEXT, sensitivity: internal}
+      transaction_time: {name: 交易时间, type: DATETIME, sensitivity: restricted}
+      transaction_type: {name: 交易类型, type: TEXT, sensitivity: confidential}
+      direction: {name: 收支方向, type: TEXT, sensitivity: confidential}
+      amount: {name: 交易金额, type: NUMERIC, sensitivity: restricted}
+      channel_type: {name: 交易渠道, type: TEXT, sensitivity: confidential}
+      transaction_status: {name: 交易状态, type: TEXT, sensitivity: confidential}
+      is_abnormal: {name: 是否异常, type: INTEGER, sensitivity: restricted}
+
+  loan_info:
+    name: 贷款合同表
+    grain: 一行一贷款合同
+    aliases: [贷款表, 信贷合同]
+    primary_key: loan_id
+    columns:
+      loan_id: {name: 贷款编号, type: TEXT, sensitivity: restricted, mask: hash}
+      customer_id: {name: 客户编号, type: TEXT, sensitivity: restricted, mask: hash}
+      branch_id: {name: 发放分行编号, type: TEXT, sensitivity: internal}
+      manager_id: {name: 客户经理编号, type: TEXT, sensitivity: confidential}
+      loan_type: {name: 贷款类型, type: TEXT, sensitivity: confidential}
+      issue_date: {name: 发放日期, type: DATE, sensitivity: confidential}
+      maturity_date: {name: 到期日期, type: DATE, sensitivity: confidential}
+      original_amount: {name: 贷款原始金额, type: NUMERIC, sensitivity: restricted}
+      outstanding_balance: {name: 贷款余额, type: NUMERIC, sensitivity: restricted}
+      annual_rate: {name: 年利率, type: NUMERIC, sensitivity: restricted}
+      overdue_days: {name: 逾期天数, type: INTEGER, sensitivity: restricted}
+      overdue_amount: {name: 逾期金额, type: NUMERIC, sensitivity: restricted}
+      five_classification: {name: 贷款五级分类, type: TEXT, sensitivity: restricted}
+      loan_status: {name: 贷款状态, type: TEXT, sensitivity: restricted}
+
+  wealth_product:
+    name: 理财产品表
+    grain: 一行一理财产品
+    aliases: [产品表, 理财产品目录]
+    primary_key: product_id
+    columns:
+      product_id: {name: 产品编号, type: TEXT, sensitivity: internal}
+      product_name: {name: 产品名称, type: TEXT, sensitivity: internal}
+      product_category: {name: 产品类型, type: TEXT, sensitivity: internal}
+      risk_level: {name: 产品风险等级, type: TEXT, sensitivity: internal}
+      term_days: {name: 产品期限天数, type: INTEGER, sensitivity: internal}
+      expected_annual_return: {name: 业绩比较基准, type: NUMERIC, sensitivity: internal}
+      launch_date: {name: 产品上线日期, type: DATE, sensitivity: internal}
+      end_date: {name: 产品结束日期, type: DATE, sensitivity: internal}
+      product_status: {name: 产品状态, type: TEXT, sensitivity: internal}
+
+  product_purchase:
+    name: 理财产品购买记录表
+    grain: 一行一笔申购记录
+    aliases: [理财购买, 申购记录]
+    primary_key: purchase_id
+    columns:
+      purchase_id: {name: 申购编号, type: TEXT, sensitivity: restricted, mask: hash}
+      product_id: {name: 产品编号, type: TEXT, sensitivity: internal}
+      customer_id: {name: 客户编号, type: TEXT, sensitivity: restricted, mask: hash}
+      branch_id: {name: 销售分行编号, type: TEXT, sensitivity: internal}
+      manager_id: {name: 客户经理编号, type: TEXT, sensitivity: confidential}
+      purchase_date: {name: 申购日期, type: DATE, sensitivity: restricted}
+      purchase_amount: {name: 申购金额, type: NUMERIC, sensitivity: restricted}
+      maturity_date: {name: 到期日期, type: DATE, sensitivity: restricted}
+      holding_amount: {name: 当前持有金额, type: NUMERIC, sensitivity: restricted}
+      purchase_channel: {name: 申购渠道, type: TEXT, sensitivity: confidential}
+      purchase_status: {name: 持有状态, type: TEXT, sensitivity: restricted}
+
+  channel_behavior:
+    name: 渠道行为表
+    grain: 一行一客户一次渠道事件
+    aliases: [埋点表, 渠道事件]
+    primary_key: behavior_id
+    columns:
+      behavior_id: {name: 行为编号, type: TEXT, sensitivity: restricted, mask: hash}
+      customer_id: {name: 客户编号, type: TEXT, sensitivity: restricted, mask: hash}
+      branch_id: {name: 客户归属分行, type: TEXT, sensitivity: internal}
+      event_time: {name: 事件时间, type: DATETIME, sensitivity: restricted}
+      channel_type: {name: 渠道类型, type: TEXT, sensitivity: confidential}
+      event_type: {name: 事件类型, type: TEXT, sensitivity: confidential}
+      session_id: {name: 会话编号, type: TEXT, sensitivity: restricted, mask: hash}
+      device_type: {name: 设备类型, type: TEXT, sensitivity: confidential}
+      event_status: {name: 事件状态, type: TEXT, sensitivity: confidential}
+
+  risk_event:
+    name: 风险事件表
+    grain: 一行一风险事件
+    aliases: [风险预警, 风控事件]
+    primary_key: risk_event_id
+    columns:
+      risk_event_id: {name: 风险事件编号, type: TEXT, sensitivity: restricted, mask: hash}
+      customer_id: {name: 客户编号, type: TEXT, sensitivity: restricted, mask: hash}
+      loan_id: {name: 关联贷款编号, type: TEXT, sensitivity: restricted, mask: hash}
+      branch_id: {name: 归属分行编号, type: TEXT, sensitivity: internal}
+      event_time: {name: 风险发生时间, type: DATETIME, sensitivity: restricted}
+      risk_type: {name: 风险类型, type: TEXT, sensitivity: restricted}
+      risk_level: {name: 风险等级, type: TEXT, sensitivity: restricted}
+      risk_score: {name: 风险评分, type: NUMERIC, sensitivity: restricted}
+      event_status: {name: 处置状态, type: TEXT, sensitivity: restricted}
+      resolved_time: {name: 处置完成时间, type: DATETIME, sensitivity: restricted}
+
+relationships:
+  - {from: customer_manager.branch_id, to: branch_info.branch_id, cardinality: many_to_one}
+  - {from: customer_info.branch_id, to: branch_info.branch_id, cardinality: many_to_one}
+  - {from: customer_info.manager_id, to: customer_manager.manager_id, cardinality: many_to_one}
+  - {from: account_info.customer_id, to: customer_info.customer_id, cardinality: many_to_one}
+  - {from: transaction_detail.account_id, to: account_info.account_id, cardinality: many_to_one}
+  - {from: loan_info.customer_id, to: customer_info.customer_id, cardinality: many_to_one}
+  - {from: product_purchase.product_id, to: wealth_product.product_id, cardinality: many_to_one}
+  - {from: product_purchase.customer_id, to: customer_info.customer_id, cardinality: many_to_one}
+  - {from: channel_behavior.customer_id, to: customer_info.customer_id, cardinality: many_to_one}
+  - {from: risk_event.customer_id, to: customer_info.customer_id, cardinality: many_to_one}
+  - {from: risk_event.loan_id, to: loan_info.loan_id, cardinality: many_to_one}

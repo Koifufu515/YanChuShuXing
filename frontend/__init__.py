@@ -1,0 +1,1 @@
+"""BankInsight product demo frontend."""

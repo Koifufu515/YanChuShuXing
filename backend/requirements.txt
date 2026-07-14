@@ -1,0 +1,7 @@
+fastapi>=0.115,<1.0
+certifi>=2024.7
+pydantic>=2.9,<3.0
+pyyaml>=6.0,<7.0
+python-dotenv>=1.0,<2.0
+sqlglot>=26.0,<27.0
+uvicorn[standard]>=0.30,<1.0

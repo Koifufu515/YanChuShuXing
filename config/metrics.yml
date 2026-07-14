@@ -1,0 +1,255 @@
+version: "0.1.0"
+default_currency: CNY
+metrics:
+  - id: active_customer_count
+    name: 有效客户数
+    aliases: [客户数, 有效客户规模]
+    theme: customer
+    expression: "COUNT(DISTINCT customer_info.customer_id)"
+    grain: customer
+    default_filters:
+      - "customer_info.customer_status = 'ACTIVE'"
+    dimensions: [branch, region, customer_level, occupation_type]
+    tables: [customer_info]
+    description: 统计期末客户状态为 ACTIVE 的去重客户数。
+
+  - id: new_customer_count
+    name: 新增客户数
+    aliases: [新开户客户数, 新客数]
+    theme: customer
+    expression: "COUNT(DISTINCT customer_info.customer_id)"
+    grain: customer
+    time_field: customer_info.register_date
+    default_filters: []
+    dimensions: [branch, region, customer_level]
+    tables: [customer_info]
+    description: 统计期内完成注册开户的去重客户数。
+
+  - id: deposit_balance
+    name: 存款余额
+    aliases: [存款规模, 储蓄余额]
+    theme: deposit
+    expression: "SUM(account_info.current_balance)"
+    grain: account_snapshot
+    default_filters:
+      - "account_info.account_status = 'ACTIVE'"
+      - "account_info.account_type IN ('CURRENT', 'TIME')"
+      - "account_info.currency_code = 'CNY'"
+    dimensions: [branch, region, account_type]
+    tables: [account_info]
+    description: 期末有效人民币活期和定期账户余额之和。
+
+  - id: current_deposit_ratio
+    name: 活期存款占比
+    aliases: [活期占比]
+    theme: deposit
+    expression: "SUM(CASE WHEN account_info.account_type = 'CURRENT' THEN account_info.current_balance ELSE 0 END) / NULLIF(SUM(account_info.current_balance), 0)"
+    grain: account_snapshot
+    format: percentage
+    default_filters:
+      - "account_info.account_status = 'ACTIVE'"
+      - "account_info.account_type IN ('CURRENT', 'TIME')"
+    dimensions: [branch, region]
+    tables: [account_info]
+    description: 有效活期存款余额占有效活期和定期存款余额的比例。
+
+  - id: transaction_count
+    name: 成功交易笔数
+    aliases: [交易笔数, 交易次数]
+    theme: transaction
+    expression: "COUNT(CASE WHEN transaction_detail.transaction_status = 'SUCCESS' THEN 1 END)"
+    grain: customer_period
+    time_field: transaction_detail.transaction_time
+    default_filters:
+      - "transaction_detail.transaction_status = 'SUCCESS'"
+    dimensions: [customer_id]
+    tables: [transaction_detail]
+    customer_filter: transaction_detail.customer_id
+    description: 指定时间范围内，指定客户交易状态为 SUCCESS 的交易笔数。
+
+  - id: transaction_inflow
+    name: 交易流入金额
+    aliases: [流入金额, 收入金额]
+    theme: transaction
+    expression: "SUM(CASE WHEN transaction_detail.transaction_status = 'SUCCESS' AND transaction_detail.direction = 'IN' THEN transaction_detail.amount ELSE 0 END)"
+    grain: customer_period
+    time_field: transaction_detail.transaction_time
+    default_filters:
+      - "transaction_detail.transaction_status = 'SUCCESS'"
+    dimensions: [customer_id]
+    tables: [transaction_detail]
+    customer_filter: transaction_detail.customer_id
+    direction_rule: "transaction_detail.direction = 'IN'"
+    description: 指定时间范围内，指定客户成功且方向为 IN 的交易金额合计。
+
+  - id: transaction_outflow
+    name: 交易流出金额
+    aliases: [流出金额, 支出金额]
+    theme: transaction
+    expression: "SUM(CASE WHEN transaction_detail.transaction_status = 'SUCCESS' AND transaction_detail.direction = 'OUT' THEN transaction_detail.amount ELSE 0 END)"
+    grain: customer_period
+    time_field: transaction_detail.transaction_time
+    default_filters:
+      - "transaction_detail.transaction_status = 'SUCCESS'"
+    dimensions: [customer_id]
+    tables: [transaction_detail]
+    customer_filter: transaction_detail.customer_id
+    direction_rule: "transaction_detail.direction = 'OUT'"
+    description: 指定时间范围内，指定客户成功且方向为 OUT 的交易金额合计。
+
+  - id: net_transaction_flow
+    name: 交易净流入
+    aliases: [净流入, 净交易流]
+    theme: transaction
+    expression: "SUM(CASE WHEN transaction_detail.transaction_status = 'SUCCESS' AND transaction_detail.direction = 'IN' THEN transaction_detail.amount WHEN transaction_detail.transaction_status = 'SUCCESS' AND transaction_detail.direction = 'OUT' THEN -transaction_detail.amount ELSE 0 END)"
+    grain: customer_period
+    time_field: transaction_detail.transaction_time
+    default_filters:
+      - "transaction_detail.transaction_status = 'SUCCESS'"
+    dimensions: [customer_id]
+    tables: [transaction_detail]
+    customer_filter: transaction_detail.customer_id
+    formula: transaction_inflow - transaction_outflow
+    description: 指定时间范围内，指定客户成功交易流入金额减去流出金额。
+
+  - id: loan_balance
+    name: 贷款余额
+    aliases: [贷款规模]
+    theme: loan
+    expression: "SUM(loan_info.outstanding_balance)"
+    grain: loan_contract
+    default_filters:
+      - "loan_info.loan_status IN ('ACTIVE', 'DEFAULTED')"
+    dimensions: [branch, region, loan_type, customer_level]
+    tables: [loan_info]
+    description: 期末未结清贷款合同的本金余额之和。
+
+  - id: new_loan_amount
+    name: 新增贷款金额
+    aliases: [贷款投放金额, 新发放贷款]
+    theme: loan
+    expression: "SUM(loan_info.original_amount)"
+    grain: loan_contract
+    time_field: loan_info.issue_date
+    default_filters: []
+    dimensions: [branch, region, loan_type]
+    tables: [loan_info]
+    description: 统计期内新发放贷款合同的原始金额之和。
+
+  - id: overdue_loan_amount
+    name: 逾期贷款金额
+    aliases: [逾期余额]
+    theme: risk
+    expression: "SUM(loan_info.overdue_amount)"
+    grain: loan_contract
+    default_filters:
+      - "loan_info.loan_status IN ('ACTIVE', 'DEFAULTED')"
+    dimensions: [branch, region, loan_type, customer_level]
+    tables: [loan_info]
+    description: 期末未结清贷款的逾期本金金额之和。
+
+  - id: overdue_loan_ratio
+    name: 贷款逾期率
+    aliases: [逾期率]
+    theme: risk
+    expression: "SUM(loan_info.overdue_amount) / NULLIF(SUM(loan_info.outstanding_balance), 0)"
+    grain: loan_contract
+    format: percentage
+    default_filters:
+      - "loan_info.loan_status IN ('ACTIVE', 'DEFAULTED')"
+    dimensions: [branch, region, loan_type, customer_level, occupation_type]
+    tables: [loan_info]
+    description: 期末逾期贷款金额占贷款余额的比例，按金额计算而非合同数。
+
+  - id: npl_ratio
+    name: 不良贷款率
+    aliases: [不良率]
+    theme: risk
+    expression: "SUM(CASE WHEN loan_info.five_classification IN ('SUBSTANDARD', 'DOUBTFUL', 'LOSS') THEN loan_info.outstanding_balance ELSE 0 END) / NULLIF(SUM(loan_info.outstanding_balance), 0)"
+    grain: loan_contract
+    format: percentage
+    default_filters:
+      - "loan_info.loan_status IN ('ACTIVE', 'DEFAULTED')"
+    dimensions: [branch, region, loan_type]
+    tables: [loan_info]
+    description: 次级、可疑、损失类贷款余额占全部未结清贷款余额的比例。
+
+  - id: wealth_sales_amount
+    name: 理财申购金额
+    aliases: [理财销量, 理财销售额]
+    theme: wealth
+    expression: "SUM(product_purchase.purchase_amount)"
+    grain: product_purchase
+    time_field: product_purchase.purchase_date
+    default_filters: []
+    dimensions: [branch, product, risk_level, purchase_channel, customer_level]
+    tables: [product_purchase, wealth_product]
+    description: 统计期内理财产品申购金额之和。
+
+  - id: wealth_buyer_count
+    name: 理财购买客户数
+    aliases: [理财客户数]
+    theme: wealth
+    expression: "COUNT(DISTINCT product_purchase.customer_id)"
+    grain: product_purchase
+    time_field: product_purchase.purchase_date
+    default_filters: []
+    dimensions: [branch, product, risk_level, customer_level]
+    tables: [product_purchase, wealth_product]
+    description: 统计期内至少购买一次理财产品的去重客户数。
+
+  - id: channel_mau
+    name: 渠道月活客户数
+    aliases: [MAU, 月活]
+    theme: channel
+    expression: "COUNT(DISTINCT channel_behavior.customer_id)"
+    grain: customer_month
+    time_field: channel_behavior.event_time
+    default_filters:
+      - "channel_behavior.event_status = 'SUCCESS'"
+      - "channel_behavior.event_type IN ('LOGIN', 'PAGE_VIEW', 'PRODUCT_VIEW', 'TRANSACTION_ATTEMPT', 'TRANSACTION_SUCCESS')"
+    dimensions: [channel_type, branch, region, customer_level]
+    tables: [channel_behavior]
+    description: 自然月内在指定渠道至少发生一次成功有效行为的去重客户数。
+
+  - id: channel_transaction_conversion
+    name: 渠道交易转化率
+    aliases: [交易转化率]
+    theme: channel
+    expression: "COUNT(DISTINCT CASE WHEN channel_behavior.event_type = 'TRANSACTION_SUCCESS' THEN channel_behavior.customer_id END) / NULLIF(COUNT(DISTINCT channel_behavior.customer_id), 0)"
+    grain: customer_period
+    time_field: channel_behavior.event_time
+    format: percentage
+    default_filters:
+      - "channel_behavior.event_status = 'SUCCESS'"
+    dimensions: [channel_type, branch, region, customer_level]
+    tables: [channel_behavior]
+    description: 统计期内成功交易客户数占渠道活跃客户数的比例。
+
+  - id: high_risk_event_count
+    name: 高风险事件数
+    aliases: [高风险预警数]
+    theme: risk
+    expression: "COUNT(DISTINCT risk_event.risk_event_id)"
+    grain: risk_event
+    time_field: risk_event.event_time
+    default_filters:
+      - "risk_event.risk_level = 'HIGH'"
+      - "risk_event.event_status <> 'FALSE_POSITIVE'"
+    dimensions: [branch, region, risk_type, event_status]
+    tables: [risk_event]
+    description: 统计期内高风险且未被判定为误报的事件数。
+
+  - id: risk_event_close_ratio
+    name: 风险事件关闭率
+    aliases: [风险处置完成率]
+    theme: risk
+    expression: "COUNT(DISTINCT CASE WHEN risk_event.event_status = 'CLOSED' THEN risk_event.risk_event_id END) / NULLIF(COUNT(DISTINCT risk_event.risk_event_id), 0)"
+    grain: risk_event
+    time_field: risk_event.event_time
+    format: percentage
+    default_filters:
+      - "risk_event.event_status <> 'FALSE_POSITIVE'"
+    dimensions: [branch, region, risk_type, risk_level]
+    tables: [risk_event]
+    description: 统计期内已关闭风险事件数占非误报风险事件数的比例。
