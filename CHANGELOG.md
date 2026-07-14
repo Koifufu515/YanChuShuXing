@@ -6,7 +6,7 @@
 
 - 整理适合团队协作的 GitHub 发布结构，补充贡献指南、安全说明和 Python 版本声明。
 - 扩充 `.gitignore`，排除本地密钥、虚拟环境、缓存、诊断文件、个人材料和生成输出。
-- 修正开发依赖中误写的 `httpx2`，统一为 FastAPI TestClient 使用的 `httpx>=0.27,<1.0`。
+- 确认 FastAPI 0.139 的 TestClient 使用 `httpx2>=2.5,<3.0`，避免回退旧 `httpx` 产生弃用警告。
 - 更新 README 与前端说明，使启动方式、Rule First Hybrid、当前能力和限制与 v0.5.2 一致。
 
 ## v0.5.2 - 2026-07-14

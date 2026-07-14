@@ -182,14 +182,14 @@
 - 绝对路径仅出现在历史进度、稳定性排查文档和本次发布指令中；发布版已改为相对说明并归档指令文件。
 - `data/processed/bankinsight.db` 为 152KB 确定性模拟数据库，仅含 C001/C002/C003 等虚构编号和统计属性，没有姓名、手机号或身份证字段，适合提交。
 - GitHub CLI 安装首轮卡在 Homebrew 自动更新，终止后跳过更新重试仍无输出；后续改用官方发行包或其他安全安装方式。
-- 已从 GitHub 官方发行包安装 GitHub CLI 2.96.0（arm64）；当前等待浏览器授权。
+- 已从 GitHub 官方发行包安装 GitHub CLI 2.96.0（arm64），并完成浏览器设备授权。
 - 发布副本位于 `BankInsight/`，只复制正式代码、配置、测试、文档、演示截图和确定性模拟数据库，桌面原始项目未被覆盖。
-- 修正 `backend/requirements-dev.txt` 中的 `httpx2` 拼写错误为 `httpx>=0.27,<1.0`，避免新成员安装失败。
+- 干净环境复验确认 FastAPI 0.139 的 TestClient 依赖 `httpx2>=2.5,<3.0`；旧 `httpx` 虽可运行但会产生弃用警告，因此保留项目原有 `httpx2` 声明。
 - 发布副本完成 Python 编译、数据库重复初始化、外键检查和87项自动化测试，全部通过；TestClient 已覆盖 `/health`、三条标准查询和结构化错误。
 - 演示数据库复核为3名虚构客户、4个账户、4笔交易、0个产品，仅含 C001 等模拟编号，无姓名、手机号、身份证或真实银行数据。
 - 文本扫描未发现真实密钥、绝对用户路径、手机号或身份证号；仅 `.env.example` 占位符和测试用 `local-secret` 命中关键字扫描。
 - 当前沙箱禁止监听本机新端口，因此本轮未重复启动 Uvicorn/Streamlit；此前真实启动与浏览器验收记录保留，当前代码以完整 TestClient 和前端契约测试复验。
-- 发布副本已创建独立 `.venv`；依赖联网安装因 Codex 当前审批额度受限未完成，本轮测试使用同一项目此前已验证的 Python 3.10.11 环境执行，仓库安装命令保持可复现。
+- 发布副本已创建独立 `.venv` 并按仓库依赖文件完成安装；`pip check`、Python 编译、数据库初始化和87项测试均在该环境通过。
 - GitHub CLI 2.96.0 已通过设备授权登录 `Koifufu515`，仓库提交身份使用 GitHub noreply 地址。
 - 已创建私有仓库 `https://github.com/Koifufu515/BankInsight`，并将 `main` 分支推送到 `origin/main`。
 - 首个提交为 `f3bda09 chore: prepare BankInsight repository for team collaboration`；远端未包含 `.env`、虚拟环境、本地归档或赛事附件。
