@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Team workflow
+
+- 新增六人团队职责边界、交叉审核矩阵、首轮六项任务及可判断的验收标准。
+- 新增功能、数据、测试、文档四类 GitHub Issue 表单和统一 Pull Request 模板。
+- 新增 CODEOWNERS，精确保护应用层、Ports、Composition Root、数据库契约、指标配置和发布入口。
+- 扩充贡献指南，明确 Issue 认领、独立分支、PR、Review、Merge、主分支同步和冲突处理流程。
+- 本次仅建立团队协作框架，不新增或修改业务功能。
+
 ### Repository audit
 
 - 以0.5.2实际代码为基准重写当前项目方案、接口契约和数据库指标字典，新增仓库一致性审计报告。

@@ -1,0 +1,58 @@
+name: 测试与安全任务
+description: 用于自动化测试、回归验收、安全检查和缺陷复现
+title: "[测试] "
+labels: ["type:test", "status:ready"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 任务背景
+      description: 说明要验证的版本、功能或风险。
+    validations:
+      required: true
+  - type: dropdown
+    id: owner_role
+    attributes:
+      label: 负责人角色
+      options:
+        - 测试、安全与文档负责人
+        - 项目负责人兼技术集成人
+        - 其他（在补充说明中写明）
+    validations:
+      required: true
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: 具体交付物
+      description: 列出测试代码、测试报告、复现记录或安全检查结果。
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: 涉及文件
+      description: 列出预计新增或修改的测试、脚本和文档路径。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 明确环境、输入、预期结果和通过条件。
+      placeholder: "- [ ] 正常路径通过\n- [ ] 失败路径返回结构化错误\n- [ ] 既有回归无退化"
+    validations:
+      required: true
+  - type: input
+    id: dependencies
+    attributes:
+      label: 依赖任务
+      description: 填写 Issue 或 PR 编号；无依赖请写“无”。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 验证证据要求
+      description: 说明需要保留的命令输出、截图、响应或数据检查记录。
+    validations:
+      required: true

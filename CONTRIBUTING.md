@@ -80,10 +80,61 @@ PYTHONPATH=backend .venv/bin/python -m app.adapters.database.init_db
 
 前端改动还应启动 FastAPI 和 Streamlit，至少验证三个标准问题、一个错误场景和窄屏布局。
 
-## 分支与 Pull Request
+## Issue 认领
 
-- 从最新主分支创建短生命周期功能分支；一个 PR 只处理一个明确目标。
-- PR 说明应包含：问题背景、改动范围、接口影响、测试证据、截图或响应示例、风险和回滚方式。
+1. 所有工作先创建或认领 GitHub Issue，不从群聊中的一句话直接开始改代码。
+2. 认领时在 Issue 留言，由项目负责人设置负责人；存在依赖时先确认前置任务状态。
+3. Issue 必须写清背景、交付物、涉及文件、验收标准、依赖任务和负责人角色。
+4. 一个 Issue 对应一个分支和一个 Pull Request。新发现的无关问题另开 Issue。
+
+## 分支命名
+
+普通成员不能直接向 `main` 提交代码。开始任务前先同步主分支，再创建短生命周期分支：
+
+```bash
+git switch main
+git pull --ff-only origin main
+git switch -c <类型>/<简短任务名>
+```
+
+推荐前缀：`product/`、`frontend/`、`data/`、`business/`、`test/`、`fix/` 和 `chore/`。首轮分支示例见 [首轮任务与验收清单](docs/首轮任务与验收清单.md)。
+
+## Pull Request
+
+- 推送独立分支后创建 PR，关联对应 Issue，并完整填写仓库模板。
+- PR 说明必须包含：问题背景、改动文件、接口和数据库影响、实际验证、截图或数据证据、风险与回滚方式。
 - 不要把格式化、无关重构和业务功能混在同一个 PR。
-- 核心 `backend/app/application/`、`backend/app/ports/` 和 `backend/app/bootstrap/container.py` 的修改必须由技术负责人审核。
 - 合并前必须确认真实密钥、个人信息、日志、缓存和本地数据库副本未进入变更列表。
+- 作者不能把自己的自测当作审核；至少由一名相关角色交叉审核。
+
+## 审核要求
+
+| 变更 | 交叉审核角色 |
+|---|---|
+| 产品方案 | 前端负责人、业务负责人 |
+| 前端实现 | 产品负责人、测试负责人 |
+| 数据库与数据 | 业务负责人、测试负责人 |
+| 业务指标与 Gold SQL | 数据负责人、项目负责人 |
+| 测试、安全与文档 | 项目负责人 |
+
+以下核心路径必须由项目负责人 `@Koifufu515` 审核：`backend/app/application/`、`backend/app/ports/`、`backend/app/bootstrap/container.py`、`sql/schema.sql`、`config/schema.yml`、`config/metrics.yml`、`README.md` 和 `CHANGELOG.md`。以 `.github/CODEOWNERS` 为准。
+
+## 合并与发布
+
+1. 审核意见全部解决、验收证据完整、自动化检查通过后，才可合并。
+2. 由项目负责人完成最终合并和版本整合；普通成员不得绕过 PR 向 `main` 推送。
+3. 合并后由任务负责人确认 Issue 自动关闭，并同步最新 `main`。
+4. 涉及版本说明时同步更新 CHANGELOG；业务能力只有合并后才能在 README 或答辩材料中标记为已完成。
+
+## 同步主分支与冲突处理
+
+PR 提交前同步最新主分支：
+
+```bash
+git fetch origin
+git merge origin/main
+```
+
+团队成员暂不使用强制推送或自行改写共享历史。只解决自己职责范围内且理解清楚的冲突；涉及 Pipeline、Ports、数据库结构、公共指标配置或多人共同编辑的文件时，邀请项目负责人和相关模块负责人共同处理。禁止使用 `git reset --hard`、删除他人代码或强制推送来规避冲突。
+
+完整角色边界、审核矩阵和主分支保护建议见 [团队分工与协作规范](docs/团队分工与协作规范.md)。

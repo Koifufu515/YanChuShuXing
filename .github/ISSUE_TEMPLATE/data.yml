@@ -1,0 +1,59 @@
+name: 数据任务
+description: 用于数据库、模拟数据、数据质量和真实数据接入任务
+title: "[数据] "
+labels: ["type:data", "status:ready"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 任务背景
+      description: 说明数据问题、业务用途和当前限制。
+    validations:
+      required: true
+  - type: dropdown
+    id: owner_role
+    attributes:
+      label: 负责人角色
+      options:
+        - 数据库与数据接入负责人
+        - 业务问题库与指标负责人
+        - 测试、安全与文档负责人
+        - 其他（在补充说明中写明）
+    validations:
+      required: true
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: 具体交付物
+      description: 列出数据字典、差距清单、脚本、质量报告或映射表。
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: 涉及文件
+      description: 列出 DDL、Schema、数据、脚本和文档路径；若不修改结构也请说明。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 包含数据量、约束、口径、质量和可重复性要求。
+      placeholder: "- [ ] DDL、Schema 与实库一致\n- [ ] 数据质量校验可重复执行"
+    validations:
+      required: true
+  - type: input
+    id: dependencies
+    attributes:
+      label: 依赖任务
+      description: 填写 Issue 编号；无依赖请写“无”。
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: 数据安全与隐私
+      description: 说明数据来源、是否为模拟数据、脱敏方式和禁止提交内容。
+    validations:
+      required: true

@@ -191,7 +191,13 @@ PYTHONPATH=. .venv/bin/python scripts/stability_check.py --iterations 60
 
 ## 团队协作
 
-开始开发前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。新增指标、数据库字段或标准问题时，必须同步更新语义配置、Gold SQL、测试和文档。核心 `application/`、`ports/` 与 `bootstrap/container.py` 的修改需要技术负责人审核。
+开始开发前请阅读以下内容：
+
+- [贡献与提交流程](CONTRIBUTING.md)：环境、Issue、分支、Pull Request、审核、合并与冲突处理。
+- [团队分工与协作规范](docs/团队分工与协作规范.md)：六人角色边界、目录所有权、交叉审核和主分支保护建议。
+- [首轮任务与验收清单](docs/首轮任务与验收清单.md)：六项可认领任务、交付物、依赖和完成标准。
+
+新增指标、数据库字段或标准问题时，必须同步更新语义配置、Gold SQL、测试和文档。核心架构、数据库契约和发布入口由 `.github/CODEOWNERS` 指定项目负责人审核。
 
 ## 安全说明
 

@@ -1,0 +1,58 @@
+name: 功能任务
+description: 用于产品功能、前端实现或后端能力的独立任务
+title: "[功能] "
+labels: ["type:feature", "status:ready"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 任务背景
+      description: 说明用户问题、当前行为和为什么需要本任务。
+    validations:
+      required: true
+  - type: dropdown
+    id: owner_role
+    attributes:
+      label: 负责人角色
+      options:
+        - 产品与交互负责人
+        - 前端实现负责人
+        - 项目负责人兼技术集成人
+        - 其他（在补充说明中写明）
+    validations:
+      required: true
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: 具体交付物
+      description: 列出可以验收的页面、代码、文档、截图或测试。
+      placeholder: "- 交付物一\n- 交付物二"
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: 涉及文件
+      description: 列出预计新增或修改的路径，并说明是否涉及核心路径。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 使用可观察、可重复验证的检查项。
+      placeholder: "- [ ] 验收项一\n- [ ] 验收项二"
+    validations:
+      required: true
+  - type: input
+    id: dependencies
+    attributes:
+      label: 依赖任务
+      description: 填写 Issue 编号；无依赖请写“无”。
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: 补充说明
+      description: 记录接口限制、风险、设计链接或建议审核人。
