@@ -50,7 +50,7 @@ class BankInsightClient:
             payload = self._decode(error.read())
         except (URLError, TimeoutError, OSError) as error:
             raise APIConnectionError(
-                "无法连接 BankInsight API，请确认后端服务已经启动。"
+                "无法连接言出数行服务，请确认后端服务已经启动。"
             ) from error
         return APIResult(
             payload=payload,
@@ -62,7 +62,7 @@ class BankInsightClient:
         try:
             payload = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise APIConnectionError("BankInsight API 返回了无法识别的响应。") from error
+            raise APIConnectionError("言出数行服务返回了无法识别的响应。") from error
         if not isinstance(payload, dict):
-            raise APIConnectionError("BankInsight API 返回格式不正确。")
+            raise APIConnectionError("言出数行服务返回格式不正确。")
         return payload

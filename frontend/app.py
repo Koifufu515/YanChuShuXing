@@ -13,7 +13,7 @@ from frontend.api_client import APIConnectionError, BankInsightClient
 from frontend.kpi_repository import load_overview_metrics
 
 
-APP_VERSION = "BankInsight 0.5.2"
+APP_VERSION = "言出数行 0.5.2"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 API_BASE_URL = os.getenv("BANKINSIGHT_API_URL", "http://127.0.0.1:8000")
 DATABASE_PATH = Path(
@@ -173,8 +173,8 @@ FAILURE_REASON_LABELS = {
 
 
 st.set_page_config(
-    page_title="BankInsight",
-    page_icon="BI",
+    page_title="言出数行——银行智能问数与协同分析系统",
+    page_icon="数",
     layout="wide",
     initial_sidebar_state="collapsed",
     menu_items={},
@@ -480,9 +480,12 @@ def _show_recommended_questions(questions: tuple[str, ...]) -> None:
 
 def main() -> None:
     _apply_style()
-    st.markdown('<div class="brand">BankInsight</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="subtitle">银行智能问数与经营分析平台</div>',
+        '<div class="brand">言出数行——银行智能问数与协同分析系统</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="subtitle">面向银行经营分析场景的智能问数与协同分析平台</div>',
         unsafe_allow_html=True,
     )
     if "selected_scenario" not in st.session_state:
@@ -508,7 +511,7 @@ def main() -> None:
     )
     if not scenario["available"]:
         st.markdown(
-            '<div class="scenario-notice">当前为产品演示版本，该模块已完成产品设计，业务能力将在后续 Sprint 中逐步开放。</div>',
+            '<div class="scenario-notice">当前为产品演示版本，该模块已完成产品设计，业务能力将在后续版本中逐步开放。</div>',
             unsafe_allow_html=True,
         )
     st.text_area(

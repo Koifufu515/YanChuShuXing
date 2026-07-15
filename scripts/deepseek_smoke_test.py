@@ -32,7 +32,7 @@ QUESTIONS = (
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="BankInsight DeepSeek smoke test")
+    parser = argparse.ArgumentParser(description="言出数行 DeepSeek 冒烟测试")
     parser.add_argument("--env-file", type=Path, default=PROJECT_ROOT / ".env")
     parser.add_argument("--question", action="append", dest="questions")
     args = parser.parse_args()
