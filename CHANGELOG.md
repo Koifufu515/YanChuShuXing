@@ -8,6 +8,7 @@
 - 新增功能、数据、测试、文档四类 GitHub Issue 表单和统一 Pull Request 模板。
 - 新增 CODEOWNERS，精确保护应用层、Ports、Composition Root、数据库契约、指标配置和发布入口。
 - 扩充贡献指南，明确 Issue 认领、独立分支、PR、Review、Merge、主分支同步和冲突处理流程。
+- 原地扩写现有 #1 至 #6 Issue，为每个角色补充执行顺序、参考文件、协作依赖、交付位置、审核人和关闭条件；编号、标题与负责人保持不变。
 - 本次仅建立团队协作框架，不新增或修改业务功能。
 
 ### Repository audit

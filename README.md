@@ -196,6 +196,7 @@ PYTHONPATH=. .venv/bin/python scripts/stability_check.py --iterations 60
 - [贡献与提交流程](CONTRIBUTING.md)：环境、Issue、分支、Pull Request、审核、合并与冲突处理。
 - [团队分工与协作规范](docs/团队分工与协作规范.md)：六人角色边界、目录所有权、交叉审核和主分支保护建议。
 - [首轮任务与验收清单](docs/首轮任务与验收清单.md)：六项可认领任务、交付物、依赖和完成标准。
+- [首轮 GitHub Issues](https://github.com/Koifufu515/BankInsight/issues)：每位成员的详细执行顺序、参考文件、交付位置、协作关系和关闭条件。
 
 新增指标、数据库字段或标准问题时，必须同步更新语义配置、Gold SQL、测试和文档。核心架构、数据库契约和发布入口由 `.github/CODEOWNERS` 指定项目负责人审核。
 
