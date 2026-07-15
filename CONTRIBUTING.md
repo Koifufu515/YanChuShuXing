@@ -1,6 +1,6 @@
-# BankInsight 协作指南
+# 言出数行——银行智能问数与协同分析系统 协作指南
 
-感谢参与 BankInsight。项目采用轻量端口与适配器架构，协作目标是让各模块能够独立开发，同时保持指标口径、API 契约和安全规则一致。
+感谢参与“言出数行”。项目采用轻量端口与适配器架构，协作目标是让各模块能够独立开发，同时保持指标口径、API 契约和安全规则一致。
 
 ## 本地环境
 
@@ -26,8 +26,8 @@ cp .env.example .env
 | 领域 | 主要目录 | 责任边界 |
 |---|---|---|
 | 前端产品 | `frontend/`、`.streamlit/` | 页面交互、中文展示、API 调用和错误恢复 |
-| 业务指标 | `config/metrics.yml`、`docs/数据库与指标字典.md` | 指标定义、口径、维度、主题和示例问法 |
-| 数据模型 | `sql/`、`config/schema.yml`、`data/` | DDL、字段语义、表关系、确定性模拟数据 |
+| 业务指标 | `config/metrics.yml`、`docs/数据库与指标字典.md` | Demo 配置维护；正式指标映射、口径、Gold SQL 和审核记录 |
+| 数据模型 | `sql/`、`config/schema.yml`、`data/` | Demo 基线；正式五表 DDL、ETL、字段语义和双环境配置 |
 | 模型生成 | `backend/app/adapters/generation/`、`backend/app/adapters/llm/` | Rule、LLM、Hybrid 路由和 Provider |
 | 安全执行 | `backend/app/adapters/safety/`、`backend/app/adapters/database/` | SQL 安全检查、只读查询、超时和限行 |
 | 应用编排 | `backend/app/application/`、`backend/app/ports/`、`backend/app/bootstrap/` | 稳定接口、Pipeline 和依赖组装 |
@@ -45,7 +45,7 @@ cp .env.example .env
 2. `docs/数据库与指标字典.md` 中的业务说明；
 3. Context Resolver 的召回规则；
 4. 对应 Gold SQL、结果格式器和自动化测试；
-5. README 或 Sprint 文档中的支持范围。
+5. README、评测规范和正式项目方案中的支持范围。
 
 ### 修改数据库结构
 
@@ -53,7 +53,7 @@ cp .env.example .env
 
 1. `sql/schema.sql`；
 2. `config/schema.yml`；
-3. `backend/app/adapters/database/init_db.py` 的确定性演示数据；
+3. Demo 初始化或正式 ETL；
 4. Executor、Safety 允许表与字段配置；
 5. Schema、外键和端到端测试；
 6. 数据库与指标字典。
@@ -78,7 +78,7 @@ PYTHONPATH=backend .venv/bin/python -m unittest discover -s tests -v
 PYTHONPATH=backend .venv/bin/python -m app.adapters.database.init_db
 ```
 
-前端改动还应启动 FastAPI 和 Streamlit，至少验证三个标准问题、一个错误场景和窄屏布局。
+前端改动还应启动 FastAPI 和 Streamlit，验证受影响问题、一个错误场景和主要比赛视口。正式数据页面不得直接读取 Excel 或数据库。
 
 ## Issue 认领
 
@@ -97,14 +97,14 @@ git pull --ff-only origin main
 git switch -c <类型>/<简短任务名>
 ```
 
-推荐前缀：`product/`、`frontend/`、`data/`、`business/`、`test/`、`fix/` 和 `chore/`。首轮分支示例见 [首轮任务与验收清单](docs/首轮任务与验收清单.md)。
+推荐前缀：`product/`、`frontend/`、`data/`、`business/`、`test/`、`fix/`、`docs/` 和 `chore/`。当前任务及依赖见 [task_plan.md](task_plan.md) 和 GitHub Issues。
 
 ## Pull Request
 
 - 推送独立分支后创建 PR，关联对应 Issue，并完整填写仓库模板。
 - PR 说明必须包含：问题背景、改动文件、接口和数据库影响、实际验证、截图或数据证据、风险与回滚方式。
 - 不要把格式化、无关重构和业务功能混在同一个 PR。
-- 合并前必须确认真实密钥、个人信息、日志、缓存和本地数据库副本未进入变更列表。
+- 合并前必须确认真实密钥、个人信息、官方原始数据、标准答案、敏感评测结果、日志、缓存和本地数据库副本未进入变更列表。
 - 作者不能把自己的自测当作审核；至少由一名相关角色交叉审核。
 
 ## 审核要求
