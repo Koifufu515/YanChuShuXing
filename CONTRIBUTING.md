@@ -26,7 +26,7 @@ cp .env.example .env
 | 领域 | 主要目录 | 责任边界 |
 |---|---|---|
 | 前端产品 | `frontend/`、`.streamlit/` | 页面交互、中文展示、API 调用和错误恢复 |
-| 业务指标 | `config/metrics.yml`、`docs/数据库与指标字典.md` | Demo 配置维护；正式指标映射、口径、Gold SQL 和审核记录 |
+| 业务指标 | `config/metrics.yml`、`docs/数据库与指标字典.md` | Demo 配置维护；正式指标映射、口径和审核记录 |
 | 数据模型 | `sql/`、`config/schema.yml`、`data/` | Demo 基线；正式五表 DDL、ETL、字段语义和双环境配置 |
 | 模型生成 | `backend/app/adapters/generation/`、`backend/app/adapters/llm/` | Rule、LLM、Hybrid 路由和 Provider |
 | 安全执行 | `backend/app/adapters/safety/`、`backend/app/adapters/database/` | SQL 安全检查、只读查询、超时和限行 |
@@ -44,7 +44,7 @@ cp .env.example .env
 1. `config/metrics.yml` 中的机器可读定义；
 2. `docs/数据库与指标字典.md` 中的业务说明；
 3. Context Resolver 的召回规则；
-4. 对应 Gold SQL、结果格式器和自动化测试；
+4. 对应结果格式器、官方答案判分规则和自动化测试；
 5. README、评测规范和正式项目方案中的支持范围。
 
 ### 修改数据库结构
@@ -64,7 +64,7 @@ cp .env.example .env
 
 - 清晰的业务指标口径；
 - 参数解析规则；
-- 经过人工核验的 Gold SQL；
+- 可追溯的业务口径和官方答案判分规则；
 - 确定性测试数据和预期结果；
 - Rule、Safety、Formatter、API 端到端测试；
 - 推荐问法与当前支持范围说明。
@@ -114,7 +114,7 @@ git switch -c <类型>/<简短任务名>
 | 产品方案 | 前端负责人、业务负责人 |
 | 前端实现 | 产品负责人、测试负责人 |
 | 数据库与数据 | 业务负责人、测试负责人 |
-| 业务指标与 Gold SQL | 数据负责人、项目负责人 |
+| 业务指标与语义口径 | 数据负责人、项目负责人 |
 | 测试、安全与文档 | 项目负责人 |
 
 以下核心路径必须由项目负责人 `@Koifufu515` 审核：`backend/app/application/`、`backend/app/ports/`、`backend/app/bootstrap/container.py`、`sql/schema.sql`、`config/schema.yml`、`config/metrics.yml`、`README.md` 和 `CHANGELOG.md`。以 `.github/CODEOWNERS` 为准。
