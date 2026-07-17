@@ -38,3 +38,11 @@ archive_local/
 tmp/
 temp/
 ~$*
+
+# Restricted competition assets and real-data workspaces
+data/real/
+data/private/
+docs/private/
+**/*_数据集.xlsx
+**/22-多模态技术与数据治理赛道-江苏农商联合银行-基于大模型与NL2SQL的银行业智能问数系统构建与应用.zip
+**/《第五届中国研究生金融科技创新大赛智算平台操作手册》（更新版）.pdf

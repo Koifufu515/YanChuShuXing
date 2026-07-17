@@ -19,7 +19,7 @@ QUESTIONS = (
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="BankInsight query stability check")
+    parser = argparse.ArgumentParser(description="言出数行查询稳定性检查")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--iterations", type=int, default=60)
     args = parser.parse_args()

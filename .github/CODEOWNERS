@@ -1,0 +1,9 @@
+# 核心架构、数据契约和发布入口必须由项目负责人审核。
+/backend/app/application/ @Koifufu515
+/backend/app/ports/ @Koifufu515
+/backend/app/bootstrap/container.py @Koifufu515
+/sql/schema.sql @Koifufu515
+/config/schema.yml @Koifufu515
+/config/metrics.yml @Koifufu515
+/README.md @Koifufu515
+/CHANGELOG.md @Koifufu515

@@ -1,6 +1,6 @@
-# BankInsight 产品页面
+# 言出数行——银行智能问数与协同分析系统 产品页面
 
-当前前端使用 Streamlit 展示 BankInsight 的 Rule First Hybrid 查询链路。页面不访问 SQLite、不实现 SQL 规则，只通过 `POST /api/v1/query` 调用 FastAPI，因此后端生成器、SQL 安全层和数据库执行器都可以独立替换。
+当前前端是“言出数行”的 Demo 技术基线，使用 Streamlit 展示 Rule First Hybrid 查询链路。页面不访问 SQLite、不实现 SQL 规则，只通过 `POST /api/v1/query` 调用 FastAPI，因此后端生成器、SQL 安全层和数据库执行器都可以独立替换。正式五表完成数据和语义契约后，页面将在保留同一 API 边界的前提下迁移业务模块、推荐问题和图表。
 
 ## 页面能力
 

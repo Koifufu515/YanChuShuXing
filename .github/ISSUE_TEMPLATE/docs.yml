@@ -1,0 +1,61 @@
+name: 文档任务
+description: 用于产品、业务、架构、运行说明和版本文档
+title: "[文档] "
+labels: ["type:docs", "status:ready"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 任务背景
+      description: 说明目标读者、现有信息缺口和文档用途。
+    validations:
+      required: true
+  - type: dropdown
+    id: owner_role
+    attributes:
+      label: 负责人角色
+      options:
+        - 产品与交互负责人
+        - 数据库与数据接入负责人
+        - 业务问题库与指标负责人
+        - 测试、安全与文档负责人
+        - 项目负责人兼技术集成人
+        - 其他（在补充说明中写明）
+    validations:
+      required: true
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: 具体交付物
+      description: 列出文档名称、章节、图表、原型或附录。
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: 涉及文件
+      description: 列出新增、更新及需要交叉检查的文档路径。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 说明完整性、一致性、链接、版本和事实核对要求。
+      placeholder: "- [ ] 与当前代码和数据一致\n- [ ] 本地链接有效\n- [ ] 未把规划写成已实现"
+    validations:
+      required: true
+  - type: input
+    id: dependencies
+    attributes:
+      label: 依赖任务
+      description: 填写 Issue 编号；无依赖请写“无”。
+    validations:
+      required: true
+  - type: textarea
+    id: reviewers
+    attributes:
+      label: 建议审核人或角色
+      description: 根据协作规范填写需要交叉审核的角色。
+    validations:
+      required: true

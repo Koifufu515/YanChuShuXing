@@ -97,7 +97,7 @@ class FrontendProductDemoTest(unittest.TestCase):
         self.assertEqual(app_test.session_state["selected_scenario"], "贷款分析")
         self.assertIn("贷款分析问题", app_test.text_area(key="question").proto.placeholder)
         self.assertTrue(
-            any("后续 Sprint" in item.value for item in app_test.markdown)
+            any("后续版本" in item.value for item in app_test.markdown)
         )
         recommendations = [
             button.label
