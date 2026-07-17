@@ -97,11 +97,12 @@ git pull --ff-only origin main
 git switch -c <类型>/<简短任务名>
 ```
 
-推荐前缀：`product/`、`frontend/`、`data/`、`business/`、`test/`、`fix/`、`docs/` 和 `chore/`。当前任务及依赖见 [task_plan.md](task_plan.md) 和 GitHub Issues。
+每项任务都从最新 `main` 创建独立分支，一个任务只对应一个分支和一个 Pull Request。推荐前缀：`product/`、`feature/`、`data/`、`business/`、`test/`、`fix/`、`docs/` 和 `chore/`。当前任务及依赖见 [task_plan.md](task_plan.md) 和 GitHub Issues。
 
 ## Pull Request
 
-- 推送独立分支后创建 PR，关联对应 Issue，并完整填写仓库模板。
+- 推送独立分支后创建 PR，以 `main` 为目标，关联对应 Issue，并完整填写仓库模板。
+- PR 标题采用“英文类型前缀 + 中文任务说明”，例如 `data: 建设正式指标数据库`、`feature: 实现智能问数页面`、`test: 建立官方题库批量评测`。
 - PR 说明必须包含：问题背景、改动文件、接口和数据库影响、实际验证、截图或数据证据、风险与回滚方式。
 - 不要把格式化、无关重构和业务功能混在同一个 PR。
 - 合并前必须确认真实密钥、个人信息、官方原始数据、标准答案、敏感评测结果、日志、缓存和本地数据库副本未进入变更列表。
@@ -123,7 +124,7 @@ git switch -c <类型>/<简短任务名>
 
 1. 审核意见全部解决、验收证据完整、自动化检查通过后，才可合并。
 2. 由项目负责人完成最终合并和版本整合；普通成员不得绕过 PR 向 `main` 推送。
-3. 合并后由任务负责人确认 Issue 自动关闭，并同步最新 `main`。
+3. 合并后由任务负责人确认 Issue 自动关闭，删除已合并的任务分支，并同步最新 `main`。
 4. 涉及版本说明时同步更新 CHANGELOG；业务能力只有合并后才能在 README 或答辩材料中标记为已完成。
 
 ## 同步主分支与冲突处理
