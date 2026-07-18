@@ -61,12 +61,14 @@ def compare_runs(
 
 
 def to_markdown(result: dict[str, Any], old_run_id: str, new_run_id: str) -> str:
+    latency = result["mean_latency_delta_ms"]
     lines = [
         f"# 版本回归对比（受控）：{old_run_id} -> {new_run_id}",
         "",
         f"- 共同题数：{result['shared_total']}",
+        f"- 仅旧版有：{len(result['only_in_old'])} 题；仅新版有：{len(result['only_in_new'])} 题",
         f"- 正确率变化：{result['correct_rate_delta'] * 100:+.1f} 个百分点",
-        f"- 平均耗时变化：{result['mean_latency_delta_ms']} ms",
+        f"- 平均耗时变化：{latency if latency is not None else 'N/A'} ms",
         "",
         f"## 改善题（{len(result['improved'])}）",
         *[f"- {question_id}" for question_id in result["improved"]],

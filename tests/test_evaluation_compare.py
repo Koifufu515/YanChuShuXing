@@ -85,6 +85,18 @@ class CompareRunsTest(unittest.TestCase):
         self.assertIn("TRAIN-S-01", markdown)
         self.assertIn("退化", markdown)
 
+    def test_markdown_shows_set_difference_and_handles_missing_latency(self) -> None:
+        old = load_run_records(self.root, "old")
+        new = load_run_records(self.root, "new")
+        result = compare_runs(old, new)
+        result["only_in_old"] = ["TRAIN-S-09"]
+        result["mean_latency_delta_ms"] = None
+        markdown = to_markdown(result, old_run_id="old", new_run_id="new")
+        self.assertIn("仅旧版有：1", markdown)
+        self.assertIn("仅新版有：0", markdown)
+        self.assertIn("N/A", markdown)
+        self.assertNotIn("None ms", markdown)
+
     def test_missing_run_raises(self) -> None:
         with self.assertRaises(FileNotFoundError):
             load_run_records(self.root, "absent")
