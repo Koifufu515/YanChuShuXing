@@ -44,7 +44,8 @@ class SQLiteExecutor:
         deadline = started + self.query_timeout_seconds
         uri = f"{self.database_path.as_uri()}?mode=ro"
         try:
-            with sqlite3.connect(uri, uri=True, timeout=5.0) as connection:
+            connection = sqlite3.connect(uri, uri=True, timeout=5.0)
+            try:
                 connection.execute("PRAGMA query_only = ON")
                 connection.set_progress_handler(
                     lambda: int(perf_counter() >= deadline), self.progress_steps
@@ -54,6 +55,8 @@ class SQLiteExecutor:
                     raise QueryExecutionError("查询没有返回结果集。")
                 columns = [column[0] for column in cursor.description]
                 fetched = cursor.fetchmany(max_rows + 1)
+            finally:
+                connection.close()
         except QueryExecutionError:
             raise
         except sqlite3.OperationalError as exc:
