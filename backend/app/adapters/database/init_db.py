@@ -44,7 +44,8 @@ def initialize_database(database_path: Path, schema_path: Path) -> Path:
     temporary_path.unlink(missing_ok=True)
 
     try:
-        with sqlite3.connect(temporary_path) as connection:
+        connection = sqlite3.connect(temporary_path)
+        try:
             connection.execute("PRAGMA foreign_keys = ON")
             connection.executescript(schema_path.read_text(encoding="utf-8"))
             _insert_demo_data(connection)
@@ -52,6 +53,8 @@ def initialize_database(database_path: Path, schema_path: Path) -> Path:
             if violations:
                 raise RuntimeError(f"演示数据外键检查失败：{violations}")
             connection.commit()
+        finally:
+            connection.close()
         os.replace(temporary_path, database_path)
     except Exception:
         temporary_path.unlink(missing_ok=True)
