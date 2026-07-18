@@ -66,8 +66,8 @@ def summarize(records: list[EvalRecord]) -> dict[str, Any]:
             "correct_among_scored": _rate(correct, scored),
         },
         "latency_ms": {
-            "p50": _percentile(latencies, 0.50),
-            "p95": _percentile(latencies, 0.95),
+            "p50": percentile(latencies, 0.50),
+            "p95": percentile(latencies, 0.95),
             "max": max(latencies) if latencies else None,
         },
     }
@@ -107,7 +107,7 @@ def _fmt_rate(rate: float | None) -> str:
     return "N/A" if rate is None else f"{rate * 100:.1f}%"
 
 
-def _percentile(values: list[int], ratio: float) -> int | None:
+def percentile(values: list[int], ratio: float) -> int | None:
     if not values:
         return None
     ordered = sorted(values)

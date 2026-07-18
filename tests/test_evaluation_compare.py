@@ -97,6 +97,27 @@ class CompareRunsTest(unittest.TestCase):
         self.assertIn("N/A", markdown)
         self.assertNotIn("None ms", markdown)
 
+    def test_grouped_rate_delta_and_latency_percentiles(self) -> None:
+        old = load_run_records(self.root, "old")
+        new = load_run_records(self.root, "new")
+        result = compare_runs(old, new)
+        self.assertAlmostEqual(
+            result["rate_delta_by_partition"]["TRAIN"], (1 / 3) - (2 / 3)
+        )
+        self.assertAlmostEqual(
+            result["rate_delta_by_difficulty"]["S"], (1 / 3) - (2 / 3)
+        )
+        self.assertIn("UNKNOWN", result["rate_delta_by_route"])
+        percentiles = result["latency_percentiles"]
+        self.assertEqual(percentiles["p50"]["old"], 100)
+        self.assertEqual(percentiles["p50"]["new"], 100)
+        self.assertEqual(percentiles["p95"]["new"], 300)
+        self.assertEqual(percentiles["p95"]["delta"], 200)
+        markdown = to_markdown(result, old_run_id="old", new_run_id="new")
+        self.assertIn("按分区正确率变化", markdown)
+        self.assertIn("P95", markdown)
+        self.assertNotIn("None", markdown)
+
     def test_missing_run_raises(self) -> None:
         with self.assertRaises(FileNotFoundError):
             load_run_records(self.root, "absent")
