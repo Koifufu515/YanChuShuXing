@@ -48,6 +48,16 @@ class ExtractNumbersTest(unittest.TestCase):
     def test_no_numbers(self) -> None:
         self.assertEqual(extract_numbers("没有数值"), [])
 
+    def test_thousand_separator_adjacent_to_cjk_unit(self) -> None:
+        numbers = extract_numbers("余额1,234元，另有12,345万元")
+        self.assertEqual(
+            numbers,
+            [
+                Number(value=1234.0, kind="amount"),
+                Number(value=123_450_000.0, kind="amount"),
+            ],
+        )
+
 
 class NormalizeDateTest(unittest.TestCase):
     def test_iso_kept(self) -> None:

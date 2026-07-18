@@ -10,7 +10,7 @@ _FULLWIDTH = str.maketrans(
     "０１２３４５６７８９．，％（）：",
     "0123456789.,%():",
 )
-_THOUSAND_SEP = re.compile(r"(?<=\d),(?=\d{3}\b)")
+_THOUSAND_SEP = re.compile(r"(?<=\d),(?=\d{3}(?![0-9]))")
 _AMOUNT = re.compile(r"(-?\d+(?:\.\d+)?)\s*(亿元|万元|元)")
 _PERCENT_POINT = re.compile(r"(-?\d+(?:\.\d+)?)\s*个百分点")
 _PERCENT = re.compile(r"(-?\d+(?:\.\d+)?)\s*%")
