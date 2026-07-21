@@ -107,6 +107,11 @@ class FrontendProductDemoTest(unittest.TestCase):
         self.assertIn("本月新增贷款金额是多少？", recommendations)
         self.assertEqual(app_test.exception, [])
 
+    def test_button_width_uses_the_supported_streamlit_argument(self):
+        from frontend import app
+
+        self.assertEqual(app._button_width_kwargs(), {"use_container_width": True})
+
     def test_streamlit_chrome_is_hidden_by_config_and_css(self):
         config = (ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8")
         self.assertIn('toolbarMode = "minimal"', config)

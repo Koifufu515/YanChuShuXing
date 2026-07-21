@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import inspect
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,14 @@ DATABASE_PATH = Path(
         PROJECT_ROOT / "data" / "processed" / "bankinsight.db",
     )
 )
+
+
+def _button_width_kwargs() -> dict[str, object]:
+    if "width" in inspect.signature(st.button).parameters:
+        return {"width": "stretch"}
+    return {"use_container_width": True}
+
+
 BUSINESS_MODULES = (
     "客户分析",
     "存款分析",
@@ -271,7 +280,7 @@ def _show_scenario_selector(selected: str) -> None:
                 key=f"scenario_{name}",
                 icon=scenario["icon"],
                 type="primary" if name == selected else "secondary",
-                width="stretch",
+                **_button_width_kwargs(),
                 on_click=_select_scenario,
                 args=(name,),
             )
@@ -472,7 +481,7 @@ def _show_recommended_questions(questions: tuple[str, ...]) -> None:
             column.button(
                 question,
                 key=f"recommend_{start}_{question}",
-                width="stretch",
+                **_button_width_kwargs(),
                 on_click=_select_question,
                 args=(question,),
             )
@@ -523,7 +532,9 @@ def main() -> None:
     )
     action_columns = st.columns([3, 1])
     with action_columns[1]:
-        start_analysis = st.button("开始分析", type="primary", width="stretch")
+        start_analysis = st.button(
+            "开始分析", type="primary", **_button_width_kwargs()
+        )
 
     _show_recommended_questions(scenario["questions"])
 
