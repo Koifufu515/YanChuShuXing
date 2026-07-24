@@ -151,6 +151,24 @@ def import_workbook(source: Path, real_root: Path, private_root: Path) -> dict[s
         conn.close()
     staging.close(); staging_path.unlink(missing_ok=True)
     active_dir = private_root / "official"; active_dir.mkdir(parents=True, exist_ok=True)
-    active = {"run_id": run_id, "source_sha256": source_sha256, "business_database": str(business.resolve()), "evaluation_database": str(evaluation.resolve())}
-    temporary = active_dir / "active_release.json.tmp"; temporary.write_text(json.dumps(active, ensure_ascii=False, indent=2), encoding="utf-8"); os.replace(temporary, active_dir / "active_release.json")
-    return active
+    active = {"run_id": run_id, "source_sha256": source_sha256}
+    active_path = active_dir / "active_release.json"
+    previous_active = active_path.read_bytes() if active_path.is_file() else None
+    temporary = active_dir / "active_release.json.tmp"; temporary.write_text(json.dumps(active, ensure_ascii=False, indent=2), encoding="utf-8"); os.replace(temporary, active_path)
+    try:
+        from scripts.data.validate_real_database import validate_active_release
+
+        validate_active_release(private_root, real_root)
+    except Exception:
+        if previous_active is None:
+            active_path.unlink(missing_ok=True)
+        else:
+            restore = active_dir / "active_release.json.restore"
+            restore.write_bytes(previous_active)
+            os.replace(restore, active_path)
+        raise
+    return {
+        **active,
+        "business_database": str(business.resolve()),
+        "evaluation_database": str(evaluation.resolve()),
+    }

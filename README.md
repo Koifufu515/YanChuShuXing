@@ -36,7 +36,7 @@
 4. 指标数据表；
 5. 问题答案清单。
 
-五张表分别承担机构维度、指标口径、衍生规则、经营事实和评测基准职责。问题答案清单是评测资产，不进入业务查询数据库，也不得用于在 Rule、Prompt 或前端中硬编码测试答案。正式字段、主外键和数据库结构由 Issue #4 审计确认后写入[数据库与指标字典](docs/数据库与指标字典.md)，当前文档不会提前编造字段。
+五张表分别承担机构维度、指标口径、衍生规则、经营事实和评测基准职责。问题答案清单是评测资产，不进入业务查询数据库，也不得用于在 Rule、Prompt 或前端中硬编码测试答案。正式业务库已经完成规范化建模与本地验收，运行时仅向问数链路开放 `institutions`、`metrics` 和 `metric_facts`。
 
 官方原始文件、标准答案、完整字段映射和敏感查询结果不上传公开 GitHub。公开仓库仅保存代码、无数据 ETL、脱敏后的结构说明和汇总评测结果。
 
@@ -82,6 +82,8 @@ QueryPipeline
 
 ### 正式赛题阶段
 
+Real 已成为后端默认数据源。系统通过 `data/private/official/active_release.json` 的 `run_id` 解析同版本业务库与评测库；任一文件缺失或 manifest 不一致都会明确报错，不会静默回退 Demo。前端经营概览通过 `/ready` 获取聚合元信息，不直接连接 SQLite。
+
 当前工作围绕六项 GitHub Issue 展开：
 
 | Issue | 工作流 | 主要责任 |
@@ -107,7 +109,7 @@ LLM 失败 -> 结构化错误，流程结束
 
 系统还保留 `rule` 和 `llm` 两种模式用于确定性演示与模型测试。LLM 失败后不会反向尝试 Rule；缺少条件、指标不支持、模型超时或 SQL 不安全时返回明确错误。
 
-## 快速运行 Demo
+## 快速运行
 
 已验证环境为 macOS Apple Silicon、Python 3.10.11。请始终使用项目根目录自己的 `.venv`。
 
@@ -117,7 +119,8 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r backend/requirements-dev.txt
 .venv/bin/python -m pip install -r frontend/requirements.txt
 
-PYTHONPATH=backend .venv/bin/python -m app.adapters.database.init_db
+PYTHONPATH=. .venv/bin/python scripts/data/init_real_database.py --source <官方工作簿路径>
+PYTHONPATH=. .venv/bin/python scripts/data/validate_real_database.py
 PYTHONPATH=backend .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -135,6 +138,7 @@ PYTHONPATH=. .venv/bin/python -X faulthandler -m streamlit run frontend/app.py \
 
 - 产品页面：`http://127.0.0.1:8501`
 - 健康检查：`http://127.0.0.1:8000/health`
+- 数据就绪检查：`http://127.0.0.1:8000/ready`
 - OpenAPI：`http://127.0.0.1:8000/docs`
 
 Generator 配置：
@@ -144,6 +148,8 @@ BANKINSIGHT_GENERATOR_MODE=rule
 BANKINSIGHT_GENERATOR_MODE=llm
 BANKINSIGHT_GENERATOR_MODE=hybrid
 ```
+
+默认 `BANKINSIGHT_DATA_ENV=real`。运行历史 Demo 时必须显式设置 `BANKINSIGHT_DATA_ENV=demo`。`BANKINSIGHT_DB_PATH` 可覆盖数据库位置，相对路径按项目根目录解析，目标不存在时返回清晰配置错误。
 
 内部环境变量、Python 类名、数据库文件名和 API 路径中的 `BankInsight` 暂时保留，以避免品牌改名引起无意义的兼容性风险；所有对外页面和正式文档统一使用“言出数行”。
 
@@ -180,9 +186,9 @@ PYTHONPATH=backend:. .venv/bin/python scripts/deepseek_smoke_test.py
 
 ## 后续计划
 
-1. 完成五张官方表审计、字段映射和双环境数据库方案；
-2. 完成官方题库语义映射、衍生口径和异常审核，并建立系统结果与官方答案直接比较的固定回归基准；
-3. 将正式数据接入现有 Context、Generator、Safety 和 Executor 主链路；
+1. 完成官方题库语义映射、衍生口径和异常审核，并建立系统结果与官方答案直接比较的固定回归基准；
+2. 建立“查询计划 JSON—通用 Prompt—确定性执行器”的正式问题规划链路；
+3. 在120道训练题上完成首轮回归与错误归因；
 4. 依据官方问题设计产品模块、推荐问题和图表；
 5. 完成端到端评测、性能优化与答辩版本收口。
 

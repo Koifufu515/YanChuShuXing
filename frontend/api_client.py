@@ -57,6 +57,23 @@ class BankInsightClient:
             elapsed_ms=round((time.perf_counter() - started) * 1000),
         )
 
+    def ready(self) -> APIResult:
+        request = urllib.request.Request(f"{self.base_url}/ready", method="GET")
+        started = time.perf_counter()
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                payload = self._decode(response.read())
+        except HTTPError as error:
+            payload = self._decode(error.read())
+        except (URLError, TimeoutError, OSError) as error:
+            raise APIConnectionError(
+                "无法获取言出数行数据源状态，请确认后端服务已经启动。"
+            ) from error
+        return APIResult(
+            payload=payload,
+            elapsed_ms=round((time.perf_counter() - started) * 1000),
+        )
+
     @staticmethod
     def _decode(body: bytes) -> dict:
         try:

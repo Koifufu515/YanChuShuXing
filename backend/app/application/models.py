@@ -27,6 +27,7 @@ class QueryContext:
     metric_context: str
     allowed_tables: frozenset[str]
     denied_columns: frozenset[str] = frozenset()
+    institution_context: str = ""
 
 
 @dataclass(frozen=True)

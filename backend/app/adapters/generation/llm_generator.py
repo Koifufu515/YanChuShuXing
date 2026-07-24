@@ -28,6 +28,10 @@ SEMANTIC_SYSTEM_PROMPT = """你是银行经营分析语义解析器。只返回�
 
 SQL_SYSTEM_PROMPT = """你是 SQLite 只读 SQL 生成器。只返回一个合法 JSON 对象，不得使用 Markdown 代码围栏或解释文字。只允许一条 SELECT 或 CTE；只能使用给定表字段和指标口径；动态值使用命名参数；禁止写操作、PRAGMA 和多语句。为兼容结果解释器：有效客户数列别名必须是 customer_count；客户账户余额必须同时返回 customer_id 和别名 account_balance；交易汇总必须返回 customer_id、transaction_count、total_in、total_out、net_amount。"""
 
+REAL_SEMANTIC_SYSTEM_PROMPT = """你是银行经营分析语义解析器。只返回合法 JSON 对象。指标和机构必须分别从给定指标上下文与机构上下文选择，不得依据银行常识扩展。当前仅支持基础指标直接查询、时间序列、机构比较、基础排名和基础均值。复合指标、复杂算子或待确认概念需要设置 clarification_required=true。较年初的基期是本期年份上一年的12月31日；比率绝对变化使用百分点；只有明确出现增幅或增长率时才计算相对增长率；数值极值与绩效排名不得混淆；全省均值和排名以13家机构完整为前提。字段类型必须严格遵守示例。"""
+
+REAL_SQL_SYSTEM_PROMPT = """你是正式银行经营数据库的 SQLite 只读 SQL 生成器。只返回合法 JSON 对象。只能查询 institutions、metrics、metric_facts；禁止 import_manifest、derived_dimensions 和任何评测库。指标与机构只能来自上下文。业务值必须使用 scaled_value(metric_value_scaled, value_scale)。只允许一条参数化 SELECT 或 CTE，日期、机构名称和指标名称使用命名参数。中间计算不得 ROUND，仅最终展示允许舍入。稳定列名优先使用 institution_id、institution_name、metric_id、metric_name、data_date、metric_value、metric_unit、rank、province_average。不得编造复合指标或未确认业务概念。"""
+
 REQUIRED_SEMANTIC_FIELDS = {
     "intent",
     "business_domain",
@@ -52,12 +56,16 @@ class LLMSQLGenerator:
         timeout_seconds: float = 20.0,
         configured_mode: str = "llm",
         provider_name: str = "deepseek",
+        prompt_profile: str = "demo",
     ) -> None:
         self.provider = provider
         self.temperature = temperature
         self.timeout_seconds = timeout_seconds
         self.configured_mode = configured_mode
         self.provider_name = provider_name
+        if prompt_profile not in {"demo", "real"}:
+            raise ValueError("prompt_profile 必须是 demo 或 real")
+        self.prompt_profile = prompt_profile
 
     def generate(self, question: str, context: QueryContext) -> GeneratedSQL:
         semantic, semantic_model, semantic_latency = self.parse_semantics(
@@ -97,7 +105,11 @@ class LLMSQLGenerator:
     ) -> tuple[BusinessSemantic, str, float]:
         response = self.provider.complete(
             LLMRequest(
-                system_prompt=SEMANTIC_SYSTEM_PROMPT,
+                system_prompt=(
+                    REAL_SEMANTIC_SYSTEM_PROMPT
+                    if self.prompt_profile == "real"
+                    else SEMANTIC_SYSTEM_PROMPT
+                ),
                 user_prompt=self._semantic_prompt(question, context),
                 temperature=self.temperature,
                 timeout_seconds=self.timeout_seconds,
@@ -120,7 +132,11 @@ class LLMSQLGenerator:
     ) -> tuple[GeneratedSQL, str, float]:
         response = self.provider.complete(
             LLMRequest(
-                system_prompt=SQL_SYSTEM_PROMPT,
+                system_prompt=(
+                    REAL_SQL_SYSTEM_PROMPT
+                    if self.prompt_profile == "real"
+                    else SQL_SYSTEM_PROMPT
+                ),
                 user_prompt=self._sql_prompt(question, semantic, context),
                 temperature=self.temperature,
                 timeout_seconds=self.timeout_seconds,
@@ -130,8 +146,12 @@ class LLMSQLGenerator:
         generated = _parse_generated_sql(payload)
         return generated, response.model, response.latency_ms
 
-    @staticmethod
-    def _semantic_prompt(question: str, context: QueryContext) -> str:
+    def _semantic_prompt(self, question: str, context: QueryContext) -> str:
+        institution_section = (
+            f"\n可用机构上下文：\n{context.institution_context}\n"
+            if self.prompt_profile == "real"
+            else ""
+        )
         return f"""用户问题：{question}
 
 可用指标上下文：
@@ -139,6 +159,7 @@ class LLMSQLGenerator:
 
 可用 Schema 上下文：
 {context.schema_context}
+{institution_section}
 
 严格按以下结构输出，不得改变字段类型：
 {{
@@ -155,9 +176,8 @@ class LLMSQLGenerator:
   "confidence": 0.95
 }}"""
 
-    @staticmethod
     def _sql_prompt(
-        question: str, semantic: BusinessSemantic, context: QueryContext
+        self, question: str, semantic: BusinessSemantic, context: QueryContext
     ) -> str:
         semantic_json = json.dumps(asdict(semantic), ensure_ascii=False)
         allowed_tables = ", ".join(sorted(context.allowed_tables))
@@ -170,6 +190,9 @@ Schema Context：
 
 Metric Context：
 {context.metric_context}
+
+Institution Context：
+{context.institution_context or 'Demo模式不使用独立机构上下文'}
 
 允许表：{allowed_tables}
 禁止字段：{', '.join(sorted(context.denied_columns)) or '无'}

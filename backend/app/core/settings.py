@@ -10,10 +10,13 @@ from app.application.errors import ConfigurationError
 
 
 VALID_GENERATOR_MODES = {"rule", "llm", "hybrid"}
+VALID_DATA_ENVIRONMENTS = {"real", "demo"}
 
 
 @dataclass(frozen=True)
 class Settings:
+    data_environment: str = "real"
+    database_path_override: str = ""
     generator_mode: str = "rule"
     llm_provider: str = "deepseek"
     llm_base_url: str = "https://api.deepseek.com"
@@ -27,9 +30,12 @@ class Settings:
         if env_file:
             load_dotenv(env_file, override=False)
         mode = os.getenv("BANKINSIGHT_GENERATOR_MODE", "rule").strip().lower()
+        data_environment = os.getenv("BANKINSIGHT_DATA_ENV", "real").strip().lower()
         provider = os.getenv("BANKINSIGHT_LLM_PROVIDER", "deepseek").strip().lower()
         if mode not in VALID_GENERATOR_MODES:
             raise ConfigurationError("BANKINSIGHT_GENERATOR_MODE 必须是 rule、llm 或 hybrid。")
+        if data_environment not in VALID_DATA_ENVIRONMENTS:
+            raise ConfigurationError("BANKINSIGHT_DATA_ENV 必须是 real 或 demo。")
         if provider != "deepseek":
             raise ConfigurationError("当前仅支持 deepseek LLM Provider。")
         try:
@@ -40,6 +46,8 @@ class Settings:
         if timeout <= 0 or not 0 <= temperature <= 2:
             raise ConfigurationError("LLM 超时或温度配置超出允许范围。")
         return cls(
+            data_environment=data_environment,
+            database_path_override=os.getenv("BANKINSIGHT_DB_PATH", "").strip(),
             generator_mode=mode,
             llm_provider=provider,
             llm_base_url=os.getenv("BANKINSIGHT_LLM_BASE_URL", "https://api.deepseek.com").strip(),
