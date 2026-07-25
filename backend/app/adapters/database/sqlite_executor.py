@@ -44,7 +44,11 @@ class SQLiteExecutor:
         deadline = started + self.query_timeout_seconds
         uri = f"{self.database_path.as_uri()}?mode=ro"
         try:
-            with sqlite3.connect(uri, uri=True, timeout=5.0) as connection:
+            connection = sqlite3.connect(uri, uri=True, timeout=5.0)
+            try:
+                connection.create_function(
+                    "scaled_value", 2, _scaled_value, deterministic=True
+                )
                 connection.execute("PRAGMA query_only = ON")
                 connection.set_progress_handler(
                     lambda: int(perf_counter() >= deadline), self.progress_steps
@@ -54,6 +58,8 @@ class SQLiteExecutor:
                     raise QueryExecutionError("查询没有返回结果集。")
                 columns = [column[0] for column in cursor.description]
                 fetched = cursor.fetchmany(max_rows + 1)
+            finally:
+                connection.close()
         except QueryExecutionError:
             raise
         except sqlite3.OperationalError as exc:
@@ -87,3 +93,15 @@ def _to_json_scalar(value: object) -> JsonScalar:
     if isinstance(value, bytes):
         return value.hex()
     return str(value)
+
+
+def _scaled_value(value: object, scale: object) -> float | int | None:
+    if value is None or scale is None:
+        return None
+    if isinstance(scale, bool) or not isinstance(scale, int) or not 0 <= scale <= 12:
+        raise ValueError("scale 必须是0到12之间的整数")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("value 必须是数值")
+    if scale == 0:
+        return value
+    return value / (10**scale)

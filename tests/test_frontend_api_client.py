@@ -33,6 +33,18 @@ class _Response:
 
 class FrontendAPIClientTest(unittest.TestCase):
     @patch("urllib.request.urlopen")
+    def test_ready_gets_backend_readiness(self, urlopen):
+        from frontend.api_client import BankInsightClient
+
+        urlopen.return_value = _Response(
+            {"status": "ready", "data_environment": "real"}
+        )
+        result = BankInsightClient("http://127.0.0.1:8000").ready()
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:8000/ready")
+        self.assertEqual(request.method, "GET")
+        self.assertEqual(result.payload["data_environment"], "real")
+    @patch("urllib.request.urlopen")
     def test_query_posts_v1_contract_and_returns_payload(self, urlopen):
         from frontend.api_client import BankInsightClient
 

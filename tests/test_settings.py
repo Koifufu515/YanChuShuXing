@@ -23,11 +23,27 @@ class SettingsTest(unittest.TestCase):
             self.assertEqual(settings.generator_mode, "hybrid")
             self.assertEqual(settings.llm_model, "deepseek-v4-pro")
             self.assertEqual(settings.llm_api_key, "local-secret")
+            self.assertEqual(settings.data_environment, "real")
 
     def test_invalid_mode_is_rejected(self):
         with patch.dict(
             os.environ, {"BANKINSIGHT_GENERATOR_MODE": "unknown"}, clear=True
         ):
+            with self.assertRaises(ConfigurationError):
+                Settings.from_env()
+
+    def test_explicit_demo_and_database_override(self):
+        with patch.dict(
+            os.environ,
+            {"BANKINSIGHT_DATA_ENV": "demo", "BANKINSIGHT_DB_PATH": "custom.db"},
+            clear=True,
+        ):
+            settings = Settings.from_env()
+        self.assertEqual(settings.data_environment, "demo")
+        self.assertEqual(settings.database_path_override, "custom.db")
+
+    def test_invalid_data_environment_is_rejected(self):
+        with patch.dict(os.environ, {"BANKINSIGHT_DATA_ENV": "auto"}, clear=True):
             with self.assertRaises(ConfigurationError):
                 Settings.from_env()
 

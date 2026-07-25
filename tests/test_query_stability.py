@@ -30,7 +30,7 @@ class QueryStabilityTest(unittest.TestCase):
     def setUp(self):
         pipeline = build_pipeline(
             self.database_path,
-            settings=Settings(generator_mode="rule"),
+            settings=Settings(data_environment="demo", generator_mode="rule"),
         )
         self.app.dependency_overrides[get_query_pipeline] = lambda: pipeline
         self.client = TestClient(self.app)

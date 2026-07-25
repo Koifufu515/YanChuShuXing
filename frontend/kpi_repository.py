@@ -1,29 +1,28 @@
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
+from frontend.api_client import BankInsightClient
 
 
-OVERVIEW_QUERIES = (
-    ("有效客户数", "SELECT COUNT(*) FROM customer_info WHERE customer_status = 'ACTIVE'"),
-    ("账户数量", "SELECT COUNT(*) FROM account_info"),
-    ("交易总数", "SELECT COUNT(*) FROM transaction_detail"),
-    ("理财产品数", "SELECT COUNT(*) FROM wealth_product"),
-)
-
-
-def load_overview_metrics(database_path: Path) -> list[tuple[str, int]]:
-    path = Path(database_path).resolve()
-    try:
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    except sqlite3.Error as error:
-        raise OSError("经营概览数据暂时不可用。") from error
-    try:
+def load_overview_metrics(client: BankInsightClient) -> list[tuple[str, str]]:
+    payload = client.ready().payload
+    if payload.get("status") != "ready":
+        raise OSError(str(payload.get("error") or "经营概览数据暂时不可用。"))
+    if payload.get("data_environment") == "real":
+        date_min = payload.get("date_min") or "-"
+        date_max = payload.get("date_max") or "-"
         return [
-            (label, int(connection.execute(sql).fetchone()[0]))
-            for label, sql in OVERVIEW_QUERIES
+            ("机构数量", _number(payload.get("institution_count"))),
+            ("基础指标数量", _number(payload.get("metric_count"))),
+            ("数据日期范围", f"{date_min} 至 {date_max}"),
+            ("事实记录数量", _number(payload.get("fact_count"))),
         ]
-    except (sqlite3.Error, TypeError, ValueError) as error:
-        raise OSError("经营概览数据暂时不可用。") from error
-    finally:
-        connection.close()
+    return [
+        ("数据环境", "Demo"),
+        ("数据库状态", "已就绪"),
+        ("查询链路", "可用"),
+        ("数据模式", "演示基线"),
+    ]
+
+
+def _number(value: object) -> str:
+    return f"{int(value):,}" if isinstance(value, (int, float)) else "-"

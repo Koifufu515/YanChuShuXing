@@ -1,30 +1,54 @@
 import inspect
-import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import URLError
+
+from frontend.api_client import APIResult
+from frontend.kpi_repository import load_overview_metrics
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class FakeClient:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def ready(self):
+        return APIResult(self.payload, 1)
+
+
 class FrontendProductDemoTest(unittest.TestCase):
-    def test_overview_metrics_are_read_from_demo_database(self):
-        from frontend.kpi_repository import load_overview_metrics
-
+    def test_real_overview_is_read_from_ready_api(self):
         metrics = dict(
-            load_overview_metrics(ROOT / "data" / "processed" / "bankinsight.db")
+            load_overview_metrics(
+                FakeClient(
+                    {
+                        "status": "ready",
+                        "data_environment": "real",
+                        "institution_count": 13,
+                        "metric_count": 21,
+                        "fact_count": 132678,
+                        "date_min": "2024-12-31",
+                        "date_max": "2026-04-30",
+                    }
+                )
+            )
         )
-        self.assertEqual(
-            metrics,
-            {"有效客户数": 2, "账户数量": 4, "交易总数": 4, "理财产品数": 0},
-        )
+        self.assertEqual(metrics["机构数量"], "13")
+        self.assertEqual(metrics["基础指标数量"], "21")
+        self.assertEqual(metrics["事实记录数量"], "132,678")
 
-    def test_overview_metrics_fail_safely_for_missing_database(self):
-        from frontend.kpi_repository import load_overview_metrics
+    def test_overview_metrics_fail_safely_when_backend_is_not_ready(self):
+        with self.assertRaises(OSError):
+            load_overview_metrics(FakeClient({"status": "not_ready"}))
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with self.assertRaises(OSError):
-                load_overview_metrics(Path(temp_dir) / "missing.db")
+    def test_frontend_overview_does_not_open_sqlite(self):
+        import frontend.kpi_repository as repository
+
+        source = Path(repository.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("sqlite3", source)
 
     def test_result_columns_and_values_are_product_friendly_chinese(self):
         from frontend import app
@@ -89,23 +113,49 @@ class FrontendProductDemoTest(unittest.TestCase):
     def test_scenario_selector_updates_copy_and_recommendations(self):
         from streamlit.testing.v1 import AppTest
 
-        app_test = AppTest.from_file(str(ROOT / "frontend" / "app.py")).run()
-        self.assertEqual(app_test.session_state["selected_scenario"], "经营分析")
-        self.assertEqual(app_test.exception, [])
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=URLError("AppTest不访问真实后端"),
+        ):
+            app_test = AppTest.from_file(
+                str(ROOT / "frontend" / "app.py")
+            ).run(timeout=10)
+            self.assertEqual(
+                app_test.session_state["selected_scenario"],
+                "经营分析",
+            )
+            self.assertEqual(app_test.exception, [])
 
-        app_test.button(key="scenario_贷款分析").click().run()
-        self.assertEqual(app_test.session_state["selected_scenario"], "贷款分析")
-        self.assertIn("贷款分析问题", app_test.text_area(key="question").proto.placeholder)
-        self.assertTrue(
-            any("后续版本" in item.value for item in app_test.markdown)
+            app_test.button(
+                key="scenario_贷款分析"
+            ).click().run(timeout=10)
+            self.assertEqual(
+                app_test.session_state["selected_scenario"],
+                "贷款分析",
+            )
+            self.assertIn(
+                "贷款分析问题",
+                app_test.text_area(key="question").proto.placeholder,
+            )
+            self.assertTrue(
+                any("后续版本" in item.value for item in app_test.markdown)
+            )
+            recommendations = [
+                button.label
+                for button in app_test.button
+                if button.key
+                and str(button.key).startswith("recommend_")
+            ]
+            self.assertIn("本月新增贷款金额是多少？", recommendations)
+            self.assertEqual(app_test.exception, [])
+
+    def test_button_width_uses_a_supported_streamlit_argument(self):
+        from frontend import app
+
+        self.assertIn(
+            app._button_width_kwargs(),
+            ({"use_container_width": True}, {"width": "stretch"}),
         )
-        recommendations = [
-            button.label
-            for button in app_test.button
-            if button.key and str(button.key).startswith("recommend_")
-        ]
-        self.assertIn("本月新增贷款金额是多少？", recommendations)
-        self.assertEqual(app_test.exception, [])
 
     def test_streamlit_chrome_is_hidden_by_config_and_css(self):
         config = (ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8")

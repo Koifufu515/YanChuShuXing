@@ -105,3 +105,41 @@ class LLMSQLGeneratorTest(unittest.TestCase):
         )
         with self.assertRaises(InvalidProviderOutputError):
             generator.generate("问题", self.context)
+
+    def test_real_prompt_profile_uses_official_three_table_contract(self):
+        from app.adapters.generation.llm_generator import LLMSQLGenerator
+
+        semantic = {
+            **SEMANTIC,
+            "intent": "metric_single_value",
+            "business_domain": "operation",
+            "metrics": ["M1"],
+            "dimensions": ["institution"],
+            "filters": {"institution_name": "机构一"},
+        }
+        context = QueryContext(
+            schema_context="tables: [institutions, metrics, metric_facts]",
+            metric_context="metrics:\n  - id: M1\n    name: 指标一\n",
+            institution_context="institutions:\n  - id: I1\n    name: 机构一\n",
+            allowed_tables=frozenset({"institutions", "metrics", "metric_facts"}),
+        )
+        provider = FakeLLMProvider(
+            [
+                json.dumps(semantic, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "sql": "SELECT scaled_value(f.metric_value_scaled, m.value_scale) AS metric_value FROM metric_facts f JOIN metrics m USING(metric_id) WHERE f.institution_id=:institution_id",
+                        "parameters": {"institution_id": "I1"},
+                        "warnings": [],
+                    }
+                ),
+            ]
+        )
+        LLMSQLGenerator(provider, prompt_profile="real").generate("查询机构一指标一", context)
+        prompts = "\n".join(
+            request.system_prompt + request.user_prompt for request in provider.requests
+        )
+        self.assertIn("scaled_value", prompts)
+        self.assertIn("机构一", prompts)
+        self.assertNotIn("TRAIN-", prompts)
+        self.assertIn("禁止 import_manifest", prompts)

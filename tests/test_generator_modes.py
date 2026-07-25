@@ -86,7 +86,9 @@ class GeneratorModeTest(unittest.TestCase):
         cls.temp_dir.cleanup()
 
     def _settings(self, mode):
-        return Settings(generator_mode=mode, llm_api_key="fake-key")
+        return Settings(
+            data_environment="demo", generator_mode=mode, llm_api_key="fake-key"
+        )
 
     def test_rule_llm_and_hybrid_keep_api_v1_response_contract(self):
         from app.main import app
@@ -224,7 +226,9 @@ class GeneratorModeTest(unittest.TestCase):
     def test_hybrid_rule_match_does_not_require_llm_configuration(self):
         pipeline = build_pipeline(
             database_path=self.database_path,
-            settings=Settings(generator_mode="hybrid", llm_api_key=""),
+            settings=Settings(
+                data_environment="demo", generator_mode="hybrid", llm_api_key=""
+            ),
         )
         from app.application.models import QueryCommand
 
@@ -238,7 +242,9 @@ class GeneratorModeTest(unittest.TestCase):
     def test_llm_missing_configuration_returns_structured_error(self):
         pipeline = build_pipeline(
             database_path=self.database_path,
-            settings=Settings(generator_mode="llm", llm_api_key=""),
+            settings=Settings(
+                data_environment="demo", generator_mode="llm", llm_api_key=""
+            ),
         )
         from app.application.models import QueryCommand
 

@@ -30,7 +30,8 @@ class DatabaseInitializationTest(unittest.TestCase):
 
     @staticmethod
     def _snapshot(database_path: Path) -> dict[str, int]:
-        with sqlite3.connect(database_path) as connection:
+        connection = sqlite3.connect(database_path)
+        try:
             table_count = connection.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'"
             ).fetchone()[0]
@@ -53,6 +54,8 @@ class DatabaseInitializationTest(unittest.TestCase):
                 WHERE customer_id = 'C001' AND account_status = 'ACTIVE'
                 """
             ).fetchone()[0]
+        finally:
+            connection.close()
         return {
             "table_count": table_count,
             "customer_count": customer_count,

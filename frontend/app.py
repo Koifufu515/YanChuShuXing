@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import html
+import inspect
 import json
 import os
-from pathlib import Path
 
 os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", "system")
 
@@ -14,14 +14,16 @@ from frontend.kpi_repository import load_overview_metrics
 
 
 APP_VERSION = "言出数行 0.5.2"
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 API_BASE_URL = os.getenv("BANKINSIGHT_API_URL", "http://127.0.0.1:8000")
-DATABASE_PATH = Path(
-    os.getenv(
-        "BANKINSIGHT_DB_PATH",
-        PROJECT_ROOT / "data" / "processed" / "bankinsight.db",
-    )
-)
+READINESS_TIMEOUT_SECONDS = 2.0
+
+
+def _button_width_kwargs() -> dict[str, object]:
+    if "width" in inspect.signature(st.button).parameters:
+        return {"width": "stretch"}
+    return {"use_container_width": True}
+
+
 BUSINESS_MODULES = (
     "客户分析",
     "存款分析",
@@ -271,7 +273,7 @@ def _show_scenario_selector(selected: str) -> None:
                 key=f"scenario_{name}",
                 icon=scenario["icon"],
                 type="primary" if name == selected else "secondary",
-                width="stretch",
+                **_button_width_kwargs(),
                 on_click=_select_scenario,
                 args=(name,),
             )
@@ -290,15 +292,19 @@ def _cards_html(items: list[tuple[str, str]], css_class: str) -> str:
 
 def _overview_items() -> list[tuple[str, str]]:
     try:
-        metrics = load_overview_metrics(DATABASE_PATH)
-    except OSError:
+        return load_overview_metrics(
+            BankInsightClient(
+                API_BASE_URL,
+                timeout_seconds=READINESS_TIMEOUT_SECONDS,
+            )
+        )
+    except (OSError, APIConnectionError):
         return [
-            ("有效客户数", "暂不可用"),
-            ("账户数量", "暂不可用"),
-            ("交易总数", "暂不可用"),
-            ("理财产品数", "暂不可用"),
+            ("机构数量", "暂不可用"),
+            ("基础指标数量", "暂不可用"),
+            ("数据日期范围", "暂不可用"),
+            ("事实记录数量", "暂不可用"),
         ]
-    return [(label, f"{value:,}") for label, value in metrics]
 
 
 def _display_value(column: str, value: object) -> str:
@@ -472,7 +478,7 @@ def _show_recommended_questions(questions: tuple[str, ...]) -> None:
             column.button(
                 question,
                 key=f"recommend_{start}_{question}",
-                width="stretch",
+                **_button_width_kwargs(),
                 on_click=_select_question,
                 args=(question,),
             )
@@ -523,7 +529,9 @@ def main() -> None:
     )
     action_columns = st.columns([3, 1])
     with action_columns[1]:
-        start_analysis = st.button("开始分析", type="primary", width="stretch")
+        start_analysis = st.button(
+            "开始分析", type="primary", **_button_width_kwargs()
+        )
 
     _show_recommended_questions(scenario["questions"])
 
