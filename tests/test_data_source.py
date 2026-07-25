@@ -41,6 +41,21 @@ class DataSourceTest(unittest.TestCase):
                 resolve_database_path(root, "real", "custom.db"), path.resolve()
             )
 
+    def test_demo_readiness_honors_database_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            custom_database = root / "custom-demo.db"
+            custom_database.touch()
+
+            payload = describe_data_source(
+                root,
+                "demo",
+                "custom-demo.db",
+            )
+
+            self.assertEqual(payload["data_environment"], "demo")
+            self.assertTrue(payload["database_ready"])
+
     def test_active_release_reconstructs_paths_and_checks_manifests(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

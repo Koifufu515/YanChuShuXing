@@ -87,7 +87,11 @@ def describe_data_source(
     database_path_override: str = "",
 ) -> dict[str, object]:
     if data_environment == DEMO:
-        path = resolve_database_path(project_root, DEMO)
+        path = resolve_database_path(
+            project_root,
+            DEMO,
+            database_path_override,
+        )
         return {"data_environment": DEMO, "database_ready": path.is_file()}
     if database_path_override.strip():
         business_database = resolve_database_path(
