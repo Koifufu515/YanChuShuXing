@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -46,7 +47,8 @@ class QueryAPITest(unittest.TestCase):
         self.database_path = Path(self.tempdir.name) / "bankinsight.db"
         initialize_database(self.database_path, ROOT / "sql" / "schema.sql")
         self.pipeline = build_pipeline(
-            self.database_path, settings=Settings(generator_mode="rule")
+            self.database_path,
+            settings=Settings(data_environment="demo", generator_mode="rule"),
         )
         app.dependency_overrides[get_query_pipeline] = lambda: self.pipeline
         self.client = TestClient(app)
@@ -103,6 +105,38 @@ class QueryAPITest(unittest.TestCase):
                     },
                 )
 
+    def test_ready_returns_public_real_metadata(self) -> None:
+        payload = {
+            "data_environment": "real",
+            "database_ready": True,
+            "run_id": "release-1",
+            "schema_version": "1",
+            "institution_count": 13,
+            "metric_count": 21,
+            "fact_count": 132678,
+            "date_min": "2024-12-31",
+            "date_max": "2026-04-30",
+        }
+        with patch("app.main.Settings.from_env", return_value=Settings()), patch(
+            "app.main.describe_data_source", return_value=payload
+        ):
+            response = self.client.get("/ready")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["institution_count"], 13)
+        self.assertNotIn("source_sha256", response.text)
+        self.assertNotIn("database_path", response.text)
+
+    def test_ready_returns_503_without_traceback(self) -> None:
+        from app.application.errors import ConfigurationError
+
+        with patch("app.main.Settings.from_env", return_value=Settings()), patch(
+            "app.main.describe_data_source",
+            side_effect=ConfigurationError("正式数据库尚未初始化，请先执行正式数据导入和验收。"),
+        ):
+            response = self.client.get("/ready")
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(response.json()["database_ready"])
+        self.assertNotIn("Traceback", response.text)
     def test_unsupported_question_is_structured_400(self) -> None:
         response = self._post("预测明年的股票价格")
         self.assertEqual(response.status_code, 400)
@@ -134,7 +168,8 @@ class QueryAPITest(unittest.TestCase):
         from app.bootstrap.container import build_pipeline
 
         app.dependency_overrides[self.get_query_pipeline] = lambda: build_pipeline(
-            Path(self.tempdir.name) / "missing.db"
+            Path(self.tempdir.name) / "missing.db",
+            settings=Settings(data_environment="demo", generator_mode="rule"),
         )
         response = self._post("查询有效客户数量")
         self.assertEqual(response.status_code, 503)

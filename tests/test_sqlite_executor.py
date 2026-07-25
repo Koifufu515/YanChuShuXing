@@ -55,6 +55,23 @@ class SQLiteExecutorTest(unittest.TestCase):
         with self.assertRaises(QueryExecutionError):
             executor.execute_query("DELETE FROM customer_info", {}, max_rows=10)
 
+    def test_scaled_value_function_handles_scale_zero_and_null(self) -> None:
+        from app.adapters.database.sqlite_executor import SQLiteExecutor
+
+        result = SQLiteExecutor(self.database_path).execute_query(
+            "SELECT scaled_value(1234, 2), scaled_value(12, 0), scaled_value(NULL, 2)",
+            {},
+        )
+        self.assertEqual(result.rows, [[12.34, 12, None]])
+
+    def test_scaled_value_rejects_invalid_scale(self) -> None:
+        from app.adapters.database.sqlite_executor import SQLiteExecutor
+
+        with self.assertRaises(QueryExecutionError):
+            SQLiteExecutor(self.database_path).execute_query(
+                "SELECT scaled_value(1234, 13)", {}
+            )
+
     def test_long_running_query_is_interrupted(self) -> None:
         from app.adapters.database.sqlite_executor import SQLiteExecutor
 

@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook
 
@@ -61,8 +62,27 @@ class RealImportContractTest(unittest.TestCase):
             result = import_workbook(source, root / "real", root / "private")
             active = json.loads((root / "private" / "official" / "active_release.json").read_text(encoding="utf-8"))
             self.assertEqual(active["run_id"], result["run_id"])
-            self.assertTrue(Path(active["business_database"]).is_file())
-            self.assertTrue(Path(active["evaluation_database"]).is_file())
+            self.assertEqual(set(active), {"run_id", "source_sha256"})
+            self.assertTrue(Path(result["business_database"]).is_file())
+            self.assertTrue(Path(result["evaluation_database"]).is_file())
+
+    def test_failed_release_validation_does_not_replace_active_release(self) -> None:
+        from scripts.data.import_official_workbook import import_workbook
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "official.xlsx"
+            _workbook(source)
+            active = root / "private" / "official" / "active_release.json"
+            active.parent.mkdir(parents=True)
+            active.write_text('{"run_id":"old","source_sha256":"old"}', encoding="utf-8")
+            with patch(
+                "scripts.data.validate_real_database.validate_active_release",
+                side_effect=RuntimeError("validation failed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "validation failed"):
+                    import_workbook(source, root / "real", root / "private")
+            self.assertEqual(json.loads(active.read_text(encoding="utf-8"))["run_id"], "old")
 
 
 if __name__ == "__main__":
