@@ -1,6 +1,8 @@
 import inspect
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import URLError
 
 from frontend.api_client import APIResult
 from frontend.kpi_repository import load_overview_metrics
@@ -111,21 +113,41 @@ class FrontendProductDemoTest(unittest.TestCase):
     def test_scenario_selector_updates_copy_and_recommendations(self):
         from streamlit.testing.v1 import AppTest
 
-        app_test = AppTest.from_file(str(ROOT / "frontend" / "app.py")).run()
-        self.assertEqual(app_test.session_state["selected_scenario"], "经营分析")
-        self.assertEqual(app_test.exception, [])
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=URLError("AppTest不访问真实后端"),
+        ):
+            app_test = AppTest.from_file(
+                str(ROOT / "frontend" / "app.py")
+            ).run(timeout=10)
+            self.assertEqual(
+                app_test.session_state["selected_scenario"],
+                "经营分析",
+            )
+            self.assertEqual(app_test.exception, [])
 
-        app_test.button(key="scenario_贷款分析").click().run()
-        self.assertEqual(app_test.session_state["selected_scenario"], "贷款分析")
-        self.assertIn("贷款分析问题", app_test.text_area(key="question").proto.placeholder)
-        self.assertTrue(any("后续版本" in item.value for item in app_test.markdown))
-        recommendations = [
-            button.label
-            for button in app_test.button
-            if button.key and str(button.key).startswith("recommend_")
-        ]
-        self.assertIn("本月新增贷款金额是多少？", recommendations)
-        self.assertEqual(app_test.exception, [])
+            app_test.button(
+                key="scenario_贷款分析"
+            ).click().run(timeout=10)
+            self.assertEqual(
+                app_test.session_state["selected_scenario"],
+                "贷款分析",
+            )
+            self.assertIn(
+                "贷款分析问题",
+                app_test.text_area(key="question").proto.placeholder,
+            )
+            self.assertTrue(
+                any("后续版本" in item.value for item in app_test.markdown)
+            )
+            recommendations = [
+                button.label
+                for button in app_test.button
+                if button.key
+                and str(button.key).startswith("recommend_")
+            ]
+            self.assertIn("本月新增贷款金额是多少？", recommendations)
+            self.assertEqual(app_test.exception, [])
 
     def test_button_width_uses_a_supported_streamlit_argument(self):
         from frontend import app

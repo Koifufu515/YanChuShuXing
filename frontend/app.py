@@ -15,6 +15,7 @@ from frontend.kpi_repository import load_overview_metrics
 
 APP_VERSION = "言出数行 0.5.2"
 API_BASE_URL = os.getenv("BANKINSIGHT_API_URL", "http://127.0.0.1:8000")
+READINESS_TIMEOUT_SECONDS = 2.0
 
 
 def _button_width_kwargs() -> dict[str, object]:
@@ -291,7 +292,12 @@ def _cards_html(items: list[tuple[str, str]], css_class: str) -> str:
 
 def _overview_items() -> list[tuple[str, str]]:
     try:
-        return load_overview_metrics(BankInsightClient(API_BASE_URL))
+        return load_overview_metrics(
+            BankInsightClient(
+                API_BASE_URL,
+                timeout_seconds=READINESS_TIMEOUT_SECONDS,
+            )
+        )
     except (OSError, APIConnectionError):
         return [
             ("机构数量", "暂不可用"),
