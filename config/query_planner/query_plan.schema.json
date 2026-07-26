@@ -1,0 +1,1475 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yanchushuxing.local/schemas/query-plan-v1.3.json",
+  "title": "言出数行标准查询计划 v1.3",
+  "description": "银行智能问数查询计划结构约束。v1.3统一OP001机构、指标输入契约，并禁止检查参数使用单数metric_id。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "institutions",
+    "metrics",
+    "time",
+    "operations",
+    "checks",
+    "output"
+  ],
+  "properties": {
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "reason",
+        "clarification_question"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "executable",
+            "clarification_required",
+            "pending_project_definition",
+            "data_unavailable"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clarification_question": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "institutions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targets",
+        "comparison_population"
+      ],
+      "properties": {
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "institution_id",
+              "role"
+            ],
+            "properties": {
+              "institution_id": {
+                "type": "string",
+                "pattern": "^ORG\\d{3}$"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "target",
+                  "left_operand",
+                  "right_operand"
+                ]
+              }
+            }
+          },
+          "uniqueItems": true
+        },
+        "comparison_population": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "institution_ids"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "none",
+                "explicit",
+                "all_official_institutions"
+              ]
+            },
+            "institution_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^ORG\\d{3}$"
+              },
+              "uniqueItems": true
+            }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested_metric_ids",
+        "source_metric_ids",
+        "concept_ids"
+      ],
+      "properties": {
+        "requested_metric_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ZB\\d{3}$"
+          },
+          "uniqueItems": true
+        },
+        "source_metric_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ZB\\d{3}$"
+          },
+          "uniqueItems": true
+        },
+        "concept_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^BC\\d{3}$"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "dates",
+        "start_date",
+        "end_date",
+        "grain",
+        "comparison_periods"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "point",
+            "range",
+            "series",
+            "comparison"
+          ]
+        },
+        "dates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "date"
+          },
+          "uniqueItems": true
+        },
+        "start_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "end_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "grain": {
+          "type": "string",
+          "enum": [
+            "day",
+            "month_end",
+            "quarter_end",
+            "year_end"
+          ]
+        },
+        "comparison_periods": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "date",
+              "start_date",
+              "end_date"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "explicit",
+                  "previous_day",
+                  "previous_month_end",
+                  "previous_quarter_end",
+                  "previous_year_same_period",
+                  "year_beginning"
+                ]
+              },
+              "date": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date"
+              },
+              "start_date": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date"
+              },
+              "end_date": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date"
+              }
+            }
+          }
+        }
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "operator_id",
+          "input_refs",
+          "output_ref",
+          "parameters"
+        ],
+        "properties": {
+          "step": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "operator_id": {
+            "type": "string",
+            "pattern": "^OP\\d{3}$"
+          },
+          "input_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "output_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "integer",
+                "boolean",
+                "null",
+                "array"
+              ]
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP001"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^ZB\\d{3}$"
+                  }
+                },
+                "parameters": {
+                  "not": {
+                    "required": [
+                      "metric_id"
+                    ]
+                  },
+                  "allOf": [
+                    {
+                      "oneOf": [
+                        {
+                          "required": [
+                            "institution_id"
+                          ],
+                          "properties": {
+                            "institution_id": {
+                              "type": "string",
+                              "pattern": "^ORG\\d{3}$"
+                            }
+                          },
+                          "not": {
+                            "required": [
+                              "institution_ids"
+                            ]
+                          }
+                        },
+                        {
+                          "required": [
+                            "institution_ids"
+                          ],
+                          "properties": {
+                            "institution_ids": {
+                              "type": "array",
+                              "minItems": 1,
+                              "uniqueItems": true,
+                              "items": {
+                                "type": "string",
+                                "pattern": "^ORG\\d{3}$"
+                              }
+                            }
+                          },
+                          "not": {
+                            "required": [
+                              "institution_id"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "oneOf": [
+                        {
+                          "required": [
+                            "date"
+                          ],
+                          "not": {
+                            "anyOf": [
+                              {
+                                "required": [
+                                  "dates"
+                                ]
+                              },
+                              {
+                                "required": [
+                                  "start_date"
+                                ]
+                              },
+                              {
+                                "required": [
+                                  "end_date"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "required": [
+                            "dates"
+                          ],
+                          "not": {
+                            "anyOf": [
+                              {
+                                "required": [
+                                  "date"
+                                ]
+                              },
+                              {
+                                "required": [
+                                  "start_date"
+                                ]
+                              },
+                              {
+                                "required": [
+                                  "end_date"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "required": [
+                            "start_date",
+                            "end_date"
+                          ],
+                          "not": {
+                            "anyOf": [
+                              {
+                                "required": [
+                                  "date"
+                                ]
+                              },
+                              {
+                                "required": [
+                                  "dates"
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP006"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "parameters": {
+                  "required": [
+                    "numerator",
+                    "denominator"
+                  ],
+                  "properties": {
+                    "numerator": {
+                      "type": "string"
+                    },
+                    "denominator": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP007"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP011"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "parameters": {
+                  "required": [
+                    "order"
+                  ],
+                  "properties": {
+                    "order": {
+                      "type": "string",
+                      "enum": [
+                        "ascending",
+                        "descending"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP012"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "parameters": {
+                  "required": [
+                    "metric_id",
+                    "performance_direction"
+                  ],
+                  "properties": {
+                    "metric_id": {
+                      "type": "string",
+                      "pattern": "^ZB\\d{3}$"
+                    },
+                    "performance_direction": {
+                      "type": "string",
+                      "enum": [
+                        "higher_is_better",
+                        "lower_is_better"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP013"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 1,
+                  "maxItems": 1
+                },
+                "parameters": {
+                  "required": [
+                    "n",
+                    "direction"
+                  ],
+                  "properties": {
+                    "n": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "direction": {
+                      "type": "string",
+                      "enum": [
+                        "top",
+                        "bottom"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP015"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 1,
+                  "maxItems": 1
+                },
+                "parameters": {
+                  "required": [
+                    "comparison_operator",
+                    "threshold",
+                    "unit"
+                  ],
+                  "properties": {
+                    "comparison_operator": {
+                      "type": "string",
+                      "enum": [
+                        ">",
+                        ">=",
+                        "<",
+                        "<=",
+                        "=",
+                        "!="
+                      ]
+                    },
+                    "threshold": {
+                      "type": [
+                        "number",
+                        "integer"
+                      ]
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "condition"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "comparison"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP016"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "parameters": {
+                  "required": [
+                    "comparison_operator",
+                    "threshold",
+                    "unit"
+                  ],
+                  "properties": {
+                    "comparison_operator": {
+                      "type": "string",
+                      "enum": [
+                        ">",
+                        ">=",
+                        "<",
+                        "<=",
+                        "=",
+                        "!="
+                      ]
+                    },
+                    "threshold": {
+                      "type": [
+                        "number",
+                        "integer"
+                      ]
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "condition"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "comparison"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP019"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 2
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP021"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "parameters": {
+                  "required": [
+                    "type",
+                    "reference_date"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "previous_month_end",
+                        "previous_quarter_end",
+                        "previous_year_same_period",
+                        "previous_year_end",
+                        "year_begin_base"
+                      ]
+                    },
+                    "reference_date": {
+                      "type": "string",
+                      "format": "date"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "parameters"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "record_exists",
+              "institution_completeness",
+              "date_completeness",
+              "metric_completeness",
+              "denominator_nonzero",
+              "unit_consistency",
+              "unrounded_comparison",
+              "tie_preservation"
+            ]
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true,
+            "not": {
+              "required": [
+                "metric_id"
+              ]
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "record_exists",
+                    "metric_completeness",
+                    "denominator_nonzero",
+                    "unit_consistency",
+                    "unrounded_comparison",
+                    "tie_preservation"
+                  ]
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "parameters": {
+                  "required": [
+                    "metric_ids"
+                  ],
+                  "properties": {
+                    "metric_ids": {
+                      "type": "array",
+                      "minItems": 1,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "pattern": "^ZB\\d{3}$"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "answer_type",
+        "result_fields",
+        "unit",
+        "rounding",
+        "tie_policy"
+      ],
+      "properties": {
+        "answer_type": {
+          "type": "string",
+          "enum": [
+            "single_value",
+            "comparison",
+            "time_series",
+            "ranking",
+            "extreme_value",
+            "boolean_with_difference",
+            "threshold_assessment",
+            "composite"
+          ]
+        },
+        "result_fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rounding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "digits"
+          ],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "final_only"
+            },
+            "digits": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          }
+        },
+        "tie_policy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "preserve_all",
+            "none",
+            null
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "properties": {
+              "code": {
+                "const": "executable"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "properties": {
+              "clarification_question": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "properties": {
+              "code": {
+                "const": "clarification_required"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "properties": {
+              "clarification_question": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "metrics": {
+            "properties": {
+              "source_metric_ids": {
+                "type": "array",
+                "minItems": 2
+              }
+            },
+            "required": [
+              "source_metric_ids"
+            ]
+          }
+        },
+        "required": [
+          "metrics"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "contains": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "metric_completeness"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "minContains": 1
+          }
+        },
+        "required": [
+          "checks"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "properties": {
+              "code": {
+                "not": {
+                  "const": "executable"
+                }
+              }
+            },
+            "required": [
+              "code"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "operations": {
+            "maxItems": 0
+          },
+          "checks": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operations": {
+            "contains": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP006"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "denominator_nonzero"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "minContains": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "checks"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operations": {
+            "contains": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP007"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "denominator_nonzero"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "minContains": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "checks"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operations": {
+            "contains": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP009"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "date_completeness"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "minContains": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "checks"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operations": {
+            "contains": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP010"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "institution_completeness"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "minContains": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "checks"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operations": {
+            "contains": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP013"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "unrounded_comparison"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "tie_preservation"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "minContains": 1
+              }
+            ]
+          },
+          "output": {
+            "properties": {
+              "tie_policy": {
+                "const": "preserve_all"
+              }
+            }
+          }
+        },
+        "required": [
+          "checks"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operations": {
+            "contains": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP014"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "unrounded_comparison"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "minContains": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "checks"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operations": {
+            "contains": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP015"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "unrounded_comparison"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "minContains": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "checks"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operations": {
+            "contains": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP016"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "unrounded_comparison"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "minContains": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "checks"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operations": {
+            "contains": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP018"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "unrounded_comparison"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "minContains": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "checks"
+        ]
+      }
+    }
+  ]
+}
