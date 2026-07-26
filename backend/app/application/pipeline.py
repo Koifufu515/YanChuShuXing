@@ -107,8 +107,9 @@ class QueryPipeline:
             if confirmation_payload and confirmation_payload.get("status") == "confirmed":
                 conditions = confirmation_payload.get("final_conditions", {})
                 metric = conditions.get("metric", {}).get("label", "暂未提供")
+                method = conditions.get("growth_method", {}).get("label", "暂未提供")
                 period = conditions.get("comparison_period", {})
-                prefix = f"最终采用条件：{metric}，{period.get('start_date', '暂未提供')} 至 {period.get('end_date', '暂未提供')}，按增长额进行机构排名。"
+                prefix = f"最终采用条件：{metric}，{method}，{period.get('start_date', '暂未提供')} 至 {period.get('end_date', '暂未提供')}，按增长额进行机构排名。"
                 summary = f"{prefix}{summary or ''}"
             self._record(command, "query_succeeded", sql=sql)
             return QueryOutcome(

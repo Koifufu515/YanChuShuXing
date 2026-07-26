@@ -31,7 +31,7 @@ TREND_PATTERN = re.compile(
 CONFIRMED_GROWTH_RANKING_PATTERN = re.compile(
     r"^__confirmed_growth_ranking__:(?P<metric_id>[A-Za-z0-9_-]+):"
     r"(?P<start_date>\d{4}-\d{2}-\d{2}):(?P<end_date>\d{4}-\d{2}-\d{2}):"
-    r"(?P<method>absolute_change)$"
+    r"(?P<method>year_start|year_over_year|month_over_month|custom_range)$"
 )
 
 
@@ -89,7 +89,7 @@ class RealRuleSQLGenerator:
                     metric_id,
                     None,
                     {"start": start_date, "end": end_date},
-                    comparison="absolute_change",
+                    comparison=matched.group("method"),
                 ),
             )
 

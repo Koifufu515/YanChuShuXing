@@ -5,7 +5,8 @@ import hmac
 import json
 import re
 import sqlite3
-from datetime import date, timedelta
+from calendar import monthrange
+from datetime import date
 from pathlib import Path
 
 from app.application.errors import ApplicationError, ConfigurationError
@@ -25,12 +26,10 @@ ANALYSIS_OPTIONS = (
     {"id": "single_value", "label": "机构指标单值"},
 )
 GROWTH_METHODS = (
-    {"id": "absolute_change", "label": "按增长额比较"},
-)
-PERIOD_MODES = (
-    {"id": "latest_30_days", "label": "最近30天"},
-    {"id": "latest_90_days", "label": "最近90天"},
-    {"id": "full_range", "label": "全部可用数据区间"},
+    {"id": "year_start", "label": "较年初增长（以上年末为基期）"},
+    {"id": "year_over_year", "label": "同比增长"},
+    {"id": "month_over_month", "label": "环比增长"},
+    {"id": "custom_range", "label": "自定义时间增长"},
 )
 
 
@@ -91,19 +90,20 @@ class RealIntentConfirmationResolver:
         if growth and ranking:
             analysis_value = ANALYSIS_OPTIONS[0]
             analysis_field = self._field("analysis", "分析方式", "recognized", analysis_value, [])
-            method_field = self._field("growth_method", "增长方式", "recognized", GROWTH_METHODS[0], [])
-            period_field = self._field("comparison_period", "比较时间", "missing", None, self._period_options())
+            method_field = self._field("growth_method", "增长方式", "needs_confirmation", None, list(GROWTH_METHODS))
         elif ranking:
             analysis_field = self._field("analysis", "分析方式", "recognized", ANALYSIS_OPTIONS[1], [])
-            method_field = self._field("growth_method", "增长方式", "unrecognized", None, list(GROWTH_METHODS), required=False)
-            period_field = self._field("comparison_period", "查询时间", "missing", None, self._period_options())
+            method_field = self._field("growth_method", "增长方式", "unrecognized", None, list(GROWTH_METHODS))
         else:
             analysis_field = self._field("analysis", "分析方式", "unrecognized", None, list(ANALYSIS_OPTIONS))
-            method_field = self._field("growth_method", "增长方式", "unrecognized", None, list(GROWTH_METHODS), required=False)
-            period_field = self._field("comparison_period", "时间条件", "missing", None, self._period_options())
+            method_field = self._field("growth_method", "增长方式", "unrecognized", None, list(GROWTH_METHODS))
 
         scope = {"id": "all_institutions", "label": f"全部{len(self.institutions)}家正式机构"}
-        fields = [metric_field, analysis_field, method_field, period_field, self._field("institution_scope", "机构范围", "recognized", scope, [])]
+        custom_start = self._field("custom_start_date", "自定义基期", "missing", None, [], required=False)
+        custom_start.update({"input_type": "date", "visible_when": {"field": "growth_method", "equals": "custom_range"}})
+        custom_end = self._field("custom_end_date", "自定义本期", "missing", None, [], required=False)
+        custom_end.update({"input_type": "date", "visible_when": {"field": "growth_method", "equals": "custom_range"}})
+        fields = [metric_field, analysis_field, method_field, custom_start, custom_end, self._field("institution_scope", "机构范围", "recognized", scope, [])]
         return {
             "version": "intent-confirmation-v1",
             "status": "required",
@@ -129,6 +129,8 @@ class RealIntentConfirmationResolver:
                 chosen[key] = field["value"]
                 continue
             selected_id = selections.get(key)
+            if field.get("input_type") == "date":
+                continue
             options = {option["id"]: option for option in field.get("options", [])}
             if field.get("required", True) and selected_id not in options:
                 raise InvalidConfirmationError(f"字段“{field['label']}”的选项无效或尚未选择。")
@@ -136,16 +138,19 @@ class RealIntentConfirmationResolver:
                 chosen[key] = options[selected_id]
         if chosen.get("analysis", {}).get("id") != "growth_ranking":
             raise InvalidConfirmationError("当前候选版仅开放已审计的机构增长排名确认查询。")
-        if chosen.get("growth_method", {}).get("id") != "absolute_change":
+        method_id = chosen.get("growth_method", {}).get("id")
+        if method_id not in {item["id"] for item in GROWTH_METHODS}:
             raise InvalidConfirmationError("增长方式不在已审计目录中。")
+        custom_keys = {"custom_start_date", "custom_end_date"}
+        if method_id != "custom_range" and set(selections) & custom_keys:
+            raise InvalidConfirmationError("非自定义增长方式不接受自定义日期。")
+        if method_id == "custom_range" and not custom_keys.issubset(selections):
+            raise InvalidConfirmationError("自定义时间必须同时填写开始日期和结束日期。")
         metric_id = chosen.get("metric", {}).get("id")
         if metric_id not in {item["id"] for item in self.metrics}:
             raise InvalidConfirmationError("指标不在当前正式目录中。")
-        period_id = chosen.get("comparison_period", {}).get("id")
-        period = next((item for item in self._period_options() if item["id"] == period_id), None)
-        if period is None:
-            raise InvalidConfirmationError("比较时间不在已审计目录中。")
-        execution_question = f"__confirmed_growth_ranking__:{metric_id}:{period['start_date']}:{period['end_date']}:absolute_change"
+        period = self._resolve_dates(metric_id, method_id, selections)
+        execution_question = f"__confirmed_growth_ranking__:{metric_id}:{period['start_date']}:{period['end_date']}:{method_id}"
         confirmed = {
             **plan,
             "status": "confirmed",
@@ -160,19 +165,44 @@ class RealIntentConfirmationResolver:
         }
         return IntentResolution(status="confirmed", confirmation=confirmed, execution_question=execution_question)
 
-    def _period_options(self) -> list[dict]:
+    def _resolve_dates(self, metric_id: str, method_id: str, selections: dict[str, str]) -> dict:
         end = date.fromisoformat(self.date_max)
-        start_min = date.fromisoformat(self.date_min)
-        values = []
-        for item in PERIOD_MODES:
-            if item["id"] == "latest_30_days":
-                start = max(start_min, end - timedelta(days=30))
-            elif item["id"] == "latest_90_days":
-                start = max(start_min, end - timedelta(days=90))
-            else:
-                start = start_min
-            values.append({**item, "start_date": start.isoformat(), "end_date": end.isoformat()})
-        return values
+        method = next(item for item in GROWTH_METHODS if item["id"] == method_id)
+        if method_id == "year_start":
+            start = date(end.year - 1, 12, 31)
+        elif method_id == "year_over_year":
+            try:
+                start = end.replace(year=end.year - 1)
+            except ValueError:
+                start = end.replace(year=end.year - 1, day=28)
+        elif method_id == "month_over_month":
+            year, month = (end.year - 1, 12) if end.month == 1 else (end.year, end.month - 1)
+            start = date(year, month, min(end.day, monthrange(year, month)[1]))
+        else:
+            try:
+                start = date.fromisoformat(selections.get("custom_start_date", ""))
+                end = date.fromisoformat(selections.get("custom_end_date", ""))
+            except ValueError as exc:
+                raise InvalidConfirmationError("自定义时间必须填写有效的开始日期和结束日期。") from exc
+        if start >= end:
+            raise InvalidConfirmationError("增长比较的基期必须早于本期。")
+        bounds = date.fromisoformat(self.date_min), date.fromisoformat(self.date_max)
+        if start < bounds[0] or end > bounds[1]:
+            raise InvalidConfirmationError("所选日期超出正式数据可用范围。")
+        for selected_date, label in ((start, "基期"), (end, "本期")):
+            if not self._date_available(metric_id, selected_date.isoformat()):
+                raise InvalidConfirmationError(f"{label}日期在该正式指标目录中没有数据。")
+        return {"id": method_id, "label": method["label"], "start_date": start.isoformat(), "end_date": end.isoformat()}
+
+    def _date_available(self, metric_id: str, data_date: str) -> bool:
+        try:
+            connection = sqlite3.connect(f"file:{self.database_path}?mode=ro", uri=True)
+            try:
+                return connection.execute("SELECT 1 FROM metric_facts WHERE metric_id = ? AND data_date = ? LIMIT 1", (metric_id, data_date)).fetchone() is not None
+            finally:
+                connection.close()
+        except sqlite3.Error as exc:
+            raise ConfigurationError("正式数据库日期目录无法读取。") from exc
 
     @staticmethod
     def _field(key: str, label: str, state: str, value: dict | None, options: list[dict], required: bool = True) -> dict:

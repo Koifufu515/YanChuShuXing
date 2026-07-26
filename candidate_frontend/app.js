@@ -173,21 +173,26 @@
     box.append(node("p","confirmation-summary",confirmation.summary||"请确认分析条件。"));
     const fields=node("div","confirmation-fields");
     (confirmation.fields||[]).forEach(field=>{
+      const condition=field.visible_when;
+      if(condition&&turn.confirmationSelections?.[condition.field]!==condition.equals)return;
       const row=node("label","confirmation-field");
       const head=node("span","confirmation-label"); head.append(node("strong","",field.label),node("em",`state-${field.state}`,confirmationStateLabels[field.state]||"暂未提供")); row.append(head);
       if(field.value){ row.append(node("span","confirmed-value",field.value.label||field.value.id)); }
-      else {
+      else if(field.input_type==="date"){
+        const input=node("input","confirmation-select");input.type="date";input.dataset.confirmField=field.key;input.dataset.turnIndex=String(index);input.value=turn.confirmationSelections?.[field.key]||"";row.append(input);
+      } else {
         const select=node("select","confirmation-select"); select.dataset.confirmField=field.key; select.dataset.turnIndex=String(index); select.disabled=!(field.options||[]).length;
         const placeholder=node("option","",(field.options||[]).length?`请选择${field.label}`:"暂无可用候选"); placeholder.value=""; select.append(placeholder);
         (field.options||[]).forEach(option=>{const item=node("option","",option.label);item.value=option.id;if(turn.confirmationSelections?.[field.key]===option.id)item.selected=true;select.append(item);});
         row.append(select);
+        if((field.options||[]).length)row.append(node("small","candidate-list",`可选：${field.options.map(option=>option.label).join("、")}`));
       }
       fields.append(row);
     });
     box.append(fields);
     const actions=node("div","confirmation-actions");
     const confirm=node("button","primary confirmation-submit","确认并查询");confirm.type="button";confirm.dataset.confirmTurn=String(index);
-    const required=(confirmation.fields||[]).filter(field=>field.required!==false&&!field.value);
+    const required=(confirmation.fields||[]).filter(field=>{const visible=!field.visible_when||turn.confirmationSelections?.[field.visible_when.field]===field.visible_when.equals;return visible&&!field.value&&(field.required!==false||field.input_type==="date");});
     confirm.disabled=required.some(field=>!turn.confirmationSelections?.[field.key]);
     const edit=node("button","ghost confirmation-edit","修改问题");edit.type="button";edit.dataset.editTurn=String(index);
     actions.append(confirm,edit);box.append(actions);
@@ -327,7 +332,8 @@
       createConversation("真实意图确认：存款增长排名");
       await submitQuestion("哪家银行存款增长最好？");
       const conversation=activeConversation(),turn=conversation?.turns?.[0];
-      if(turn&&["selecting","confirmed"].includes(intentDemo)){turn.confirmationSelections={comparison_period:"full_range"};persist();render();}
+      if(turn&&intentDemo==="selecting"){turn.confirmationSelections={growth_method:"custom_range",custom_start_date:"2025-01-01",custom_end_date:"2026-04-30"};persist();render();}
+      if(turn&&intentDemo==="confirmed"){turn.confirmationSelections={growth_method:"year_over_year"};persist();render();}
       if(turn&&intentDemo==="confirmed")await confirmTurn(0);
     }
   }

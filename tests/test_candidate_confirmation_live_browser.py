@@ -17,13 +17,14 @@ class CandidateConfirmationLiveBrowserTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="ycsx_confirmation_browser_") as profile:
             before = self._dom(profile, "intent_demo=before")
             self.assertIn("待确认", before)
-            self.assertIn("缺少条件", before)
+            self.assertIn("需要确认", before)
             self.assertIn("各项存款余额", before)
             self.assertNotIn("最终采用条件", before)
 
             selecting = self._dom(profile, "intent_demo=selecting")
             self.assertIn("选择中", selecting)
-            self.assertIn("全部可用数据区间", selecting)
+            self.assertIn("自定义时间增长", selecting)
+            self.assertIn('data-confirm-field="custom_start_date"', selecting)
 
             restored = self._dom(profile, "")
             self.assertIn("选择中", restored)
@@ -33,7 +34,7 @@ class CandidateConfirmationLiveBrowserTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="ycsx_confirmation_confirmed_") as confirmed_profile:
             confirmed = self._dom(confirmed_profile, "intent_demo=confirmed", budget=9000)
             self.assertIn("最终采用条件", confirmed)
-            self.assertIn("按增长额比较", confirmed)
+            self.assertIn("同比增长", confirmed)
             self.assertIn("metric_value", confirmed)
             self.assertNotIn("CLARIFICATION_REQUIRED", confirmed)
 

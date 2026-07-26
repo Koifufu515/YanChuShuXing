@@ -69,9 +69,13 @@ class IntentConfirmationTest(unittest.TestCase):
         self.assertEqual(fields["metric"]["state"], "recognized")
         self.assertEqual(fields["metric"]["value"]["id"], "ZB001")
         self.assertEqual(fields["analysis"]["state"], "recognized")
-        self.assertEqual(fields["growth_method"]["state"], "recognized")
-        self.assertEqual(fields["comparison_period"]["state"], "missing")
-        self.assertTrue(fields["comparison_period"]["options"])
+        self.assertEqual(fields["growth_method"]["state"], "needs_confirmation")
+        self.assertEqual(
+            {item["id"] for item in fields["growth_method"]["options"]},
+            {"year_start", "year_over_year", "month_over_month", "custom_range"},
+        )
+        self.assertEqual(fields["custom_start_date"]["state"], "missing")
+        self.assertEqual(fields["custom_end_date"]["state"], "missing")
 
     def test_confirmed_growth_ranking_queries_real_rows(self):
         pending = self._ask("哪家银行存款增长最好？")
@@ -79,14 +83,15 @@ class IntentConfirmationTest(unittest.TestCase):
             "哪家银行存款增长最好？",
             {
                 "token": pending.confirmation["token"],
-                "selections": {"comparison_period": "full_range"},
+                "selections": {"growth_method": "year_start"},
             },
         )
         self.assertIsNone(outcome.error)
         self.assertEqual(self.executor.calls, 1)
         self.assertEqual(outcome.confirmation["status"], "confirmed")
         self.assertEqual(outcome.metadata.result_type, "排名")
-        self.assertEqual(outcome.metadata.semantic.comparison, "absolute_change")
+        self.assertEqual(outcome.metadata.semantic.comparison, "year_start")
+        self.assertEqual(outcome.confirmation["final_conditions"]["comparison_period"]["start_date"], "2025-12-31")
         self.assertEqual([row[0] for row in outcome.rows], ["江苏省B市农商行", "江苏省A市农商行", "江苏省C市农商行"])
         self.assertIn("最终采用条件", outcome.summary)
         self.assertNotIn("江苏省B市农商行", outcome.sql)
@@ -98,7 +103,7 @@ class IntentConfirmationTest(unittest.TestCase):
         missing_fields = {item["key"]: item for item in missing.confirmation["fields"]}
         multi_fields = {item["key"]: item for item in multi.confirmation["fields"]}
         unknown_fields = {item["key"]: item for item in unknown.confirmation["fields"]}
-        self.assertEqual(missing_fields["comparison_period"]["state"], "missing")
+        self.assertEqual(missing_fields["growth_method"]["state"], "unrecognized")
         self.assertEqual(multi_fields["metric"]["state"], "needs_confirmation")
         self.assertEqual(unknown_fields["metric"]["state"], "unrecognized")
         self.assertEqual(unknown_fields["analysis"]["state"], "unrecognized")
@@ -107,9 +112,10 @@ class IntentConfirmationTest(unittest.TestCase):
     def test_tampered_token_field_and_candidate_are_rejected_without_query(self):
         pending = self._ask("哪家银行存款增长最好？")
         attempts = (
-            {"token": "0" * 64, "selections": {"comparison_period": "full_range"}},
-            {"token": pending.confirmation["token"], "selections": {"comparison_period": "made_up"}},
-            {"token": pending.confirmation["token"], "selections": {"metric": "ZB999", "comparison_period": "full_range"}},
+            {"token": "0" * 64, "selections": {"growth_method": "year_start"}},
+            {"token": pending.confirmation["token"], "selections": {"growth_method": "made_up"}},
+            {"token": pending.confirmation["token"], "selections": {"metric": "ZB999", "growth_method": "year_start"}},
+            {"token": pending.confirmation["token"], "selections": {"growth_method": "year_start", "custom_start_date": "2025-01-01"}},
         )
         for index, confirmation in enumerate(attempts):
             outcome = self.pipeline.run(QueryCommand("哪家银行存款增长最好？", "u", "c", f"t{index}", confirmation))
@@ -128,11 +134,40 @@ class IntentConfirmationTest(unittest.TestCase):
             body = pending.json()
             self.assertEqual(body["error"]["code"], "CLARIFICATION_REQUIRED")
             self.assertIsNone(body["sql"])
-            confirmed = client.post("/api/v1/query", json={"question": body["question"], "user_id": "u", "conversation_id": "c", "confirmation": {"token": body["confirmation"]["token"], "selections": {"comparison_period": "full_range"}}})
+            confirmed = client.post("/api/v1/query", json={"question": body["question"], "user_id": "u", "conversation_id": "c", "confirmation": {"token": body["confirmation"]["token"], "selections": {"growth_method": "year_over_year"}}})
             self.assertEqual(confirmed.status_code, 200)
             self.assertEqual(confirmed.json()["confirmation"]["status"], "confirmed")
         finally:
             client.close()
+
+    def test_year_over_year_month_over_month_and_custom_dates_are_real_and_validated(self):
+        expected = {
+            "year_over_year": ("2025-04-30", "2026-04-30"),
+            "month_over_month": ("2026-03-30", "2026-04-30"),
+            "custom_range": ("2025-01-01", "2026-04-30"),
+        }
+        for method, dates in expected.items():
+            pending = self._ask("哪家银行存款增长最好？")
+            selections = {"growth_method": method}
+            if method == "custom_range":
+                selections.update({"custom_start_date": dates[0], "custom_end_date": dates[1]})
+            outcome = self._ask("哪家银行存款增长最好？", {"token": pending.confirmation["token"], "selections": selections})
+            self.assertIsNone(outcome.error)
+            self.assertEqual(outcome.metadata.semantic.comparison, method)
+            period = outcome.confirmation["final_conditions"]["comparison_period"]
+            self.assertEqual((period["start_date"], period["end_date"]), dates)
+        pending = self._ask("哪家银行存款增长最好？")
+        invalids = (
+            {"growth_method": "custom_range", "custom_start_date": "2026-04-30", "custom_end_date": "2025-01-01"},
+            {"growth_method": "custom_range", "custom_start_date": "2020-01-01", "custom_end_date": "2026-04-30"},
+            {"growth_method": "custom_range", "custom_start_date": "2025-01-02", "custom_end_date": "2026-04-30"},
+        )
+        calls = self.executor.calls
+        for selections in invalids:
+            outcome = self._ask("哪家银行存款增长最好？", {"token": pending.confirmation["token"], "selections": selections})
+            self.assertEqual(outcome.error.code, "INVALID_CONFIRMATION")
+            self.assertIsNone(outcome.sql)
+        self.assertEqual(self.executor.calls, calls)
 
     def _ask(self, question, confirmation=None):
         return self.pipeline.run(QueryCommand(question, "u", "c", "req", confirmation))
@@ -148,8 +183,14 @@ class IntentConfirmationTest(unittest.TestCase):
             connection.executemany("INSERT INTO institutions VALUES (?, ?)", [("ORG001", "江苏省A市农商行"), ("ORG002", "江苏省B市农商行"), ("ORG003", "江苏省C市农商行")])
             connection.executemany("INSERT INTO metrics VALUES (?, ?, ?, ?, ?)", [("ZB001", "各项存款余额", "存款", "亿元", 2), ("ZB002", "各项贷款余额", "贷款", "亿元", 2)])
             rows = []
-            for institution, start, end in (("ORG001", 1000, 1300), ("ORG002", 1000, 1600), ("ORG003", 1000, 1100)):
-                rows.extend([("2025-01-01", "ZB001", institution, start), ("2026-04-30", "ZB001", institution, end)])
+            values = {
+                "ORG001": (900, 950, 1080, 1100, 1200, 1300),
+                "ORG002": (1000, 1200, 1000, 1000, 1500, 1600),
+                "ORG003": (1000, 1000, 1050, 1050, 1200, 1100),
+            }
+            dates = ("2025-01-01", "2025-04-30", "2025-12-31", "2026-01-01", "2026-03-30", "2026-04-30")
+            for institution, institution_values in values.items():
+                rows.extend((data_date, "ZB001", institution, value) for data_date, value in zip(dates, institution_values))
             connection.executemany("INSERT INTO metric_facts VALUES (?, ?, ?, ?)", rows)
             connection.commit()
         finally:
