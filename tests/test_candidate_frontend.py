@@ -18,6 +18,7 @@ class CandidateFrontendContractTest(unittest.TestCase):
         cls.html = (CANDIDATE / "index.html").read_text(encoding="utf-8")
         cls.css = (CANDIDATE / "styles.css").read_text(encoding="utf-8")
         cls.javascript = (CANDIDATE / "app.js").read_text(encoding="utf-8")
+        cls.adapter = (CANDIDATE / "result_adapter.js").read_text(encoding="utf-8")
         cls.contract = json.loads(
             (CANDIDATE / "result_contract.json").read_text(encoding="utf-8")
         )
@@ -26,9 +27,13 @@ class CandidateFrontendContractTest(unittest.TestCase):
         client = TestClient(app)
         page = client.get("/candidate")
         asset = client.get("/candidate/assets/result_contract.json")
+        adapter = client.get("/candidate/assets/result_adapter.js")
+        echarts = client.get("/candidate/assets/echarts.min.js")
         self.assertEqual(page.status_code, 200)
         self.assertIn("三栏", page.text)
         self.assertEqual(asset.status_code, 200)
+        self.assertEqual(adapter.status_code, 200)
+        self.assertEqual(echarts.status_code, 200)
         self.assertNotIn("access-control-allow-origin", page.headers)
 
     def test_layout_has_three_named_regions_and_fixed_desktop_ratio(self) -> None:
@@ -87,6 +92,24 @@ class CandidateFrontendContractTest(unittest.TestCase):
         self.assertIn("截图验收模式", self.javascript)
         self.assertIn("不是银行真实数据", self.javascript)
         self.assertNotIn("fixture", self.html.split("candidate-banner", 1)[0])
+
+    def test_charts_use_named_fields_and_local_echarts(self) -> None:
+        for field in ("metric_value", "metric_unit", "metric_name", "institution_name", "data_date"):
+            self.assertIn(field, self.adapter)
+        self.assertIn('src="/candidate/assets/echarts.min.js"', self.html)
+        self.assertIn('src="/candidate/assets/result_adapter.js"', self.html)
+        self.assertIn("echarts.init", self.javascript)
+        self.assertIn("chart.dispose()", self.javascript)
+        self.assertIn("chart.resize()", self.javascript)
+        self.assertNotIn("rows.slice(0, 12)", self.javascript)
+        self.assertNotIn("columns.at(-1)", self.javascript)
+
+    def test_single_ranking_and_trend_contract_is_explicit(self) -> None:
+        self.assertIn('view.chart === "bar" && view.resultType === "排名"', self.adapter)
+        self.assertIn('view.chart === "line" && view.resultType === "趋势"', self.adapter)
+        self.assertIn("items.map(item => item.value)", self.adapter)
+        self.assertIn("axisLabels: labels", self.adapter)
+        self.assertIn('metricName: cell(row, model.indexes.metric) || "指标值"', self.adapter)
 
 
 if __name__ == "__main__":

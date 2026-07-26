@@ -141,6 +141,24 @@ PYTHONPATH=. .venv/bin/python -X faulthandler -m streamlit run frontend/app.py \
 - 数据就绪检查：`http://127.0.0.1:8000/ready`
 - OpenAPI：`http://127.0.0.1:8000/docs`
 
+### 候选三栏前端（Windows 联调）
+
+候选前端与 API 由同一个 FastAPI 服务提供，不需要跨域配置，也不会替换现有 Streamlit 回退版。正式数据已初始化时，在项目根目录运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_candidate_frontend.ps1 -GeneratorMode rule -Port 8512
+```
+
+浏览器访问 `http://127.0.0.1:8512/candidate`。页面图表使用仓库内的 `candidate_frontend/echarts.min.js`，运行时不访问 CDN；结果适配器只按 `metric_value`、`metric_unit`、`metric_name`、`institution_name`、`data_date` 五个字段名取值，不依赖列顺序。停止该 8512 进程即可回退，不影响原 Streamlit 页面。
+
+本地图表 DOM 审计可选运行：
+
+```powershell
+$env:YCSX_EDGE_PATH='C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+$env:PYTHONPATH='backend;.'
+python -m unittest tests.test_candidate_chart_browser -v
+```
+
 Generator 配置：
 
 ```text

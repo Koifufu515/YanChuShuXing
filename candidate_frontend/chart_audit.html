@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>言出数行图表浏览器审计</title>
+  <style>
+    body { margin: 0; font: 14px sans-serif; color: #172033; }
+    .chart { width: 720px; height: 420px; }
+    #audit-report { white-space: pre-wrap; }
+  </style>
+</head>
+<body data-audit="running">
+  <div id="ranking" class="chart"></div>
+  <div id="trend" class="chart"></div>
+  <pre id="audit-report"></pre>
+  <script src="echarts.min.js"></script>
+  <script src="result_adapter.js"></script>
+  <script>
+    (() => {
+      const assertions = [];
+      const assert = (condition, name) => {
+        assertions.push({ name, pass: Boolean(condition) });
+        if (!condition) throw new Error(name);
+      };
+      const dateText = index => {
+        const date = new Date(Date.UTC(2025, 0, 1 + index));
+        return date.toISOString().slice(0, 10);
+      };
+      try {
+        const adapter = window.YCSXResultAdapter;
+        const columns = ["metric_unit", "data_date", "institution_name", "metric_value", "metric_name"];
+        const singleModel = adapter.adapt({ columns, rows: [["亿元", "2026-06-30", "江苏省A市农商行", 41.7, "各项存款余额"]] });
+        const single = adapter.singleValue(singleModel);
+        assert(single.metricName === "各项存款余额", "单值按 metric_name 映射");
+        assert(single.valueText === "41.70 亿元", "单值数值和单位格式正确");
+
+        const rankingRows = Array.from({ length: 13 }, (_, index) => [
+          "亿元", "2026-06-30", `江苏省${String.fromCharCode(65 + index)}市农商行`, 100 + index * 7, "各项贷款余额",
+        ]);
+        const rankingModel = adapter.adapt({ columns, rows: rankingRows });
+        const rankingItems = adapter.ranking(rankingModel);
+        const rankingOption = adapter.rankingOption(rankingModel);
+        assert(rankingItems.length === 13, "排名保留 13 家机构");
+        assert(rankingOption.yAxis.data.length === 13, "排名轴展示全部机构");
+        assert(new Set(rankingOption.yAxis.data).size === 13, "排名机构名称不重复");
+        assert(rankingOption.xAxis.min === 0, "排名数值轴从零开始");
+        assert(!Object.prototype.hasOwnProperty.call(rankingOption.yAxis.axisLabel, "overflow"), "排名机构名称不截断");
+
+        const trendRows = Array.from({ length: 486 }, (_, index) => [
+          "亿元", dateText(index), "江苏省A市农商行", index - 243, "各项存款余额",
+        ]);
+        const trendModel = adapter.adapt({ columns, rows: trendRows.slice().reverse() });
+        const trendItems = adapter.trend(trendModel);
+        const trendOption = adapter.trendOption(trendModel);
+        const audit = trendOption.__audit;
+        assert(trendItems.length === 486 && trendOption.series[0].data.length === 486, "趋势渲染全部 486 个点");
+        assert(audit.firstDate === dateText(0) && audit.lastDate === dateText(485), "趋势按日期排序且保留首末日期");
+        assert(audit.axisLabels.length >= 6 && audit.axisLabels.length <= 8, "日期标签数量为 6 至 8 个");
+        assert(new Set(audit.axisLabels).size === audit.axisLabels.length, "日期标签不重复");
+        assert(audit.axisLabels[0] === audit.firstDate && audit.axisLabels.at(-1) === audit.lastDate, "日期标签包含首末日期");
+        assert(trendOption.yAxis.min({ min: -9, max: 5 }) < -9, "负值范围处理正确");
+        assert(trendOption.yAxis.max({ min: -9, max: 5 }) > 5, "正值范围处理正确");
+        assert(trendOption.yAxis.min({ min: 0, max: 5 }) === 0, "零值范围处理正确");
+        assert(trendOption.yAxis.min({ min: 3, max: 5 }) > 0, "正值趋势使用可读范围而非强制压到零");
+
+        const rankingChart = echarts.init(document.getElementById("ranking"), null, { renderer: "svg" });
+        const trendChart = echarts.init(document.getElementById("trend"), null, { renderer: "svg" });
+        const { __audit: ignored, ...visibleTrendOption } = trendOption;
+        rankingChart.setOption(rankingOption);
+        trendChart.setOption(visibleTrendOption);
+        assert(document.querySelectorAll("svg").length === 2, "ECharts 在浏览器 DOM 中生成两个 SVG 图表");
+
+        document.body.dataset.audit = "pass";
+        document.getElementById("audit-report").textContent = JSON.stringify({ pass: true, assertions }, null, 2);
+      } catch (error) {
+        document.body.dataset.audit = "fail";
+        document.getElementById("audit-report").textContent = JSON.stringify({ pass: false, error: String(error), assertions }, null, 2);
+      }
+    })();
+  </script>
+</body>
+</html>

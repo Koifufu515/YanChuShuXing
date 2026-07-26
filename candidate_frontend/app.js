@@ -5,7 +5,11 @@
   const ACTIVE_KEY = "ycsx_candidate_active_v1";
   const USER_ID = "competition_demo_user";
   const $ = (selector) => document.querySelector(selector);
+  const adapter = window.YCSXResultAdapter;
+  const chartInstances = new Set();
   const state = { contract: null, conversations: [], activeId: null, selectedTurn: null, page: "chat", busy: false, suggestions: [] };
+
+  window.addEventListener("resize", () => chartInstances.forEach(chart => chart.resize()));
 
   function node(tag, className, text) {
     const element = document.createElement(tag);
@@ -100,7 +104,7 @@
     const rows = Array.isArray(payload?.rows) ? payload.rows.filter(Array.isArray) : [];
     let chart = payload?.metadata?.chart_type || state.contract.result_types[resultType]?.chart || "none";
     if (!columns.length || !rows.length) chart = "none";
-    return { resultType, chart, columns, rows, summary: payload?.summary || "当前结果暂无可用结论。" };
+    return { resultType, chart, columns, rows, summary: payload?.summary || "当前结果暂无可用结论。", model: adapter.adapt(payload) };
   }
 
   function renderWelcome(root) {
@@ -126,31 +130,32 @@
     table.append(tbody); wrap.append(table); return wrap;
   }
 
-  function numericSeries(view) {
-    if (view.columns.length < 2) return [];
-    const labelIndex = view.chart === "line" && view.columns.includes("data_date") ? view.columns.indexOf("data_date") : 0;
-    let index = -1;
-    for (let i = 1; i < view.columns.length; i += 1) if (view.rows.some(row => Number.isFinite(Number(row[i])))) { index = i; break; }
-    if (index < 0) return [];
-    return view.rows.slice(0, 12).map(row => ({ label: valueOrMissing(row[labelIndex]), value: Number(row[index]) })).filter(item => Number.isFinite(item.value));
+  function disposeCharts() {
+    chartInstances.forEach(chart => { try { chart.dispose(); } catch (_) {} });
+    chartInstances.clear();
   }
 
   function makeChart(view) {
-    const series = numericSeries(view); if (!series.length) return null;
-    const wrap = node("div", "chart"); wrap.setAttribute("role", "img"); wrap.setAttribute("aria-label", `${view.resultType}图表`);
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("viewBox", "0 0 560 180");
-    const max = Math.max(...series.map(item => Math.abs(item.value)), 1); const ns = "http://www.w3.org/2000/svg";
-    const add = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); Object.entries(attrs).forEach(([k,v]) => e.setAttribute(k, String(v))); if (text !== undefined) e.textContent = String(text); svg.append(e); };
-    add("line", { x1:40, y1:145, x2:545, y2:145, stroke:"#d2d7e0" });
-    if (view.chart === "line") {
-      const points = series.map((item, i) => `${50 + i * (480 / Math.max(series.length - 1, 1))},${135 - (Math.abs(item.value) / max) * 105}`).join(" ");
-      add("polyline", { points, fill:"none", stroke:"#1577e0", "stroke-width":3, "stroke-linejoin":"round" });
-      series.forEach((item, i) => { const x=50+i*(480/Math.max(series.length-1,1)), y=135-(Math.abs(item.value)/max)*105; add("circle", {cx:x,cy:y,r:4,fill:"#1577e0"}); add("text", {x,y:165,"text-anchor":"middle",fill:"#667085","font-size":9}, item.label.slice(0,7)); });
-    } else {
-      const width = Math.min(42, 450 / Math.max(series.length,1) * .62); const gap = 480 / Math.max(series.length,1);
-      series.forEach((item, i) => { const height=(Math.abs(item.value)/max)*105, x=50+i*gap+(gap-width)/2; add("rect", {x,y:135-height,width,height,rx:3,fill:i===0?"#1577e0":"#77afea"}); add("text", {x:x+width/2,y:165,"text-anchor":"middle",fill:"#667085","font-size":9}, item.label.slice(0,7)); });
-    }
-    wrap.append(svg); return wrap;
+    const option = adapter.chartOption(view, view.model);
+    if (!option || !window.echarts) return null;
+    const kind = view.chart === "bar" ? "ranking" : "trend";
+    const wrap = node("div", `chart echarts-chart ${kind}`);
+    wrap.dataset.echarts = kind;
+    wrap.__ycsxOption = option;
+    wrap.setAttribute("role", "img");
+    wrap.setAttribute("aria-label", `${view.resultType}图表`);
+    return wrap;
+  }
+
+  function mountCharts(root) {
+    root.querySelectorAll("[data-echarts]").forEach(element => {
+      const option = element.__ycsxOption;
+      if (!option) return;
+      const { __audit, ...echartsOption } = option;
+      const chart = window.echarts.init(element, null, { renderer: "svg" });
+      chart.setOption(echartsOption, true);
+      chartInstances.add(chart);
+    });
   }
 
   function renderAnswer(turn, index) {
@@ -164,7 +169,7 @@
       const spec = state.contract.error_states[payload.error.code] || ["查询失败", "查询未完成，请稍后重试。"]; const error = node("div", "error-card"); error.append(node("strong", "", spec[0])); error.append(node("span", "", payload.error.message || spec[1])); body.append(error);
     } else {
       body.append(node("p", "answer-summary", view.summary));
-      if (view.resultType === "单值" && view.rows[0]) { const grid=node("div","kpi-grid"); const item=node("div","kpi"); item.append(node("span","",view.columns.at(-1)||"查询结果")); item.append(node("strong","",valueOrMissing(view.rows[0].at(-1)))); grid.append(item); body.append(grid); }
+      if (view.resultType === "单值") { const single=adapter.singleValue(view.model); if(single){ const grid=node("div","kpi-grid"); const item=node("div","kpi"); item.append(node("span","",single.metricName)); item.append(node("strong","",single.valueText)); grid.append(item); body.append(grid); } }
       const chart = makeChart(view); if (chart) body.append(chart);
       if (view.rows.length) body.append(makeTable(view)); else body.append(node("p", "", "本次查询没有返回数据明细。"));
     }
@@ -172,11 +177,11 @@
   }
 
   function renderMessages() {
-    const root = $("#message-scroll"); root.replaceChildren(); const conversation = activeConversation();
+    const root = $("#message-scroll"); disposeCharts(); root.replaceChildren(); const conversation = activeConversation();
     $("#page-title").textContent = conversation?.title || "新会话";
     if (!conversation || !conversation.turns.length) renderWelcome(root);
     else conversation.turns.forEach((turn, index) => { const user=node("article","message user"); const bubble=node("div","bubble"); bubble.append(node("p","",turn.question)); user.append(bubble,node("span","human-avatar","你")); root.append(user,renderAnswer(turn,index)); });
-    requestAnimationFrame(() => { root.scrollTop = root.scrollHeight; });
+    requestAnimationFrame(() => { mountCharts(root); root.scrollTop = root.scrollHeight; });
   }
 
   function kv(parent, label, value) { const row=node("div","kv"); row.append(node("span","",label),node("strong","",valueOrMissing(value))); parent.append(row); }
@@ -254,9 +259,12 @@
     try { const examples=await fetch("/api/v1/examples"); const payload=await examples.json(); state.suggestions=(payload.examples||[]).map(item=>item.question).filter(Boolean); } catch (_) { state.suggestions=[]; }
     loadConversations(); installFixture(); bind(); render();
     const params=new URLSearchParams(location.search);
-    if(params.get("real_demo")==="1"&&!params.get("fixture")&&state.suggestions[1]){
-      createConversation("真实数据库联调：机构排名");
-      await submitQuestion(state.suggestions[1]);
+    const demoMode=params.get("real_demo");
+    const demoIndex={single:0,ranking:1,trend:2,"1":1}[demoMode];
+    if(Number.isInteger(demoIndex)&&!params.get("fixture")&&state.suggestions[demoIndex]){
+      const demoNames={single:"单值",ranking:"机构排名",trend:"趋势"};
+      createConversation(`真实数据库联调：${demoNames[demoMode]||"机构排名"}`);
+      await submitQuestion(state.suggestions[demoIndex]);
     }
   }
   initialize().catch(()=>{document.body.replaceChildren(node("div","error-card","候选前端资源加载失败，请重新启动服务。"));});
