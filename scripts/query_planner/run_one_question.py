@@ -1,0 +1,1021 @@
+from __future__ import annotations
+
+import argparse
+import calendar
+import re
+import json
+import sys
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_ROOT = PROJECT_ROOT / "backend"
+sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.adapters.llm.deepseek_provider import DeepSeekLLMProvider
+from app.application.models import LLMRequest
+from app.core.settings import Settings
+
+try:
+    from jsonschema import Draft202012Validator
+except ImportError as exc:
+    raise SystemExit(
+        "缺少 jsonschema。请先执行：.venv/bin/pip install 'jsonschema>=4.23,<5.0'"
+    ) from exc
+
+
+DEFAULT_QUESTION = "江苏省A市农商行在2025年6月15日，各项存款余额是多少？"
+
+
+def load_json(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"无法读取JSON文件：{path}") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit(f"JSON文件顶层必须是对象：{path}")
+    return payload
+
+
+def parse_model_json(text: str) -> dict:
+    if not text or "```" in text:
+        raise ValueError("DeepSeek输出不是严格JSON，或包含Markdown代码围栏。")
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("DeepSeek输出顶层必须是JSON对象。")
+    return payload
+
+
+
+
+def parse_iso_date(value: object, field_path: str, errors: list[dict]) -> date | None:
+    if not isinstance(value, str):
+        errors.append(
+            {
+                "path": field_path,
+                "message": f"日期必须是字符串YYYY-MM-DD，实际为：{value!r}",
+            }
+        )
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        errors.append(
+            {
+                "path": field_path,
+                "message": f"日期必须是合法的ISO格式YYYY-MM-DD，实际为：{value!r}",
+            }
+        )
+        return None
+
+
+def month_end(year: int, month: int) -> date:
+    return date(year, month, calendar.monthrange(year, month)[1])
+
+
+def resolve_base_date(base_type: str, reference: date) -> date | None:
+    if base_type == "previous_month_end":
+        year = reference.year
+        month = reference.month - 1
+        if month == 0:
+            year -= 1
+            month = 12
+        return month_end(year, month)
+
+    if base_type == "previous_quarter_end":
+        quarter = (reference.month - 1) // 3 + 1
+        if quarter == 1:
+            return date(reference.year - 1, 12, 31)
+        return month_end(reference.year, (quarter - 1) * 3)
+
+    if base_type == "previous_year_same_period":
+        previous_year = reference.year - 1
+        if reference == month_end(reference.year, reference.month):
+            return month_end(previous_year, reference.month)
+        try:
+            return reference.replace(year=previous_year)
+        except ValueError:
+            return date(previous_year, 2, 28)
+
+    if base_type in {"previous_year_end", "year_begin_base"}:
+        return date(reference.year - 1, 12, 31)
+
+    return None
+
+
+def collect_plan_dates(plan: dict, errors: list[dict]) -> list[tuple[str, date]]:
+    """收集time、operation parameters及OP021推导出的全部必要日期。"""
+    collected: list[tuple[str, date]] = []
+
+    def add_date(path: str, raw_value: object) -> None:
+        parsed = parse_iso_date(raw_value, path, errors)
+        if parsed is not None:
+            collected.append((path, parsed))
+
+    time_plan = plan.get("time")
+    if isinstance(time_plan, dict):
+        dates = time_plan.get("dates")
+        if isinstance(dates, list):
+            for index, value in enumerate(dates):
+                add_date(f"time.dates.{index}", value)
+
+        for field in ("start_date", "end_date"):
+            value = time_plan.get(field)
+            if value is not None:
+                add_date(f"time.{field}", value)
+
+        periods = time_plan.get("comparison_periods")
+        if isinstance(periods, list):
+            for index, period in enumerate(periods):
+                if not isinstance(period, dict):
+                    continue
+                for field in ("date", "start_date", "end_date"):
+                    value = period.get(field)
+                    if value is not None:
+                        add_date(
+                            f"time.comparison_periods.{index}.{field}",
+                            value,
+                        )
+
+    operations = plan.get("operations")
+    if isinstance(operations, list):
+        for index, operation in enumerate(operations):
+            if not isinstance(operation, dict):
+                continue
+            parameters = operation.get("parameters")
+            if not isinstance(parameters, dict):
+                continue
+
+            for field in (
+                "date",
+                "start_date",
+                "end_date",
+                "reference_date",
+            ):
+                value = parameters.get(field)
+                if value is not None:
+                    add_date(
+                        f"operations.{index}.parameters.{field}",
+                        value,
+                    )
+
+            values = parameters.get("dates")
+            if isinstance(values, list):
+                for date_index, value in enumerate(values):
+                    add_date(
+                        f"operations.{index}.parameters.dates.{date_index}",
+                        value,
+                    )
+
+            if operation.get("operator_id") == "OP021":
+                base_type = parameters.get("type")
+                reference_raw = parameters.get("reference_date")
+                reference = None
+                if isinstance(reference_raw, str):
+                    try:
+                        reference = date.fromisoformat(reference_raw)
+                    except ValueError:
+                        reference = None
+                if isinstance(base_type, str) and reference is not None:
+                    expected = resolve_base_date(base_type, reference)
+                    if expected is not None:
+                        collected.append(
+                            (
+                                f"operations.{index}.derived_base_date",
+                                expected,
+                            )
+                        )
+
+    return collected
+
+
+def has_check(plan: dict, check_type: str) -> bool:
+    checks = plan.get("checks")
+    return isinstance(checks, list) and any(
+        isinstance(item, dict) and item.get("type") == check_type
+        for item in checks
+    )
+
+
+def validate_business_rules(plan: dict, context: dict, question: str) -> list[dict]:
+    """校验JSON Schema难以表达的日期、算子语义和题意链路。"""
+    errors: list[dict] = []
+
+    data_range = context.get("data_range")
+    if not isinstance(data_range, dict):
+        return [
+            {
+                "path": "context.data_range",
+                "message": "机器语义上下文缺少data_range。",
+            }
+        ]
+
+    range_start = parse_iso_date(
+        data_range.get("start_date"),
+        "context.data_range.start_date",
+        errors,
+    )
+    range_end = parse_iso_date(
+        data_range.get("end_date"),
+        "context.data_range.end_date",
+        errors,
+    )
+    if range_start is None or range_end is None:
+        return errors
+
+    status = plan.get("status")
+    status_code = status.get("code") if isinstance(status, dict) else None
+    operations = plan.get("operations")
+    operation_list = operations if isinstance(operations, list) else []
+    checks = plan.get("checks")
+    check_list = checks if isinstance(checks, list) else []
+
+    all_dates = collect_plan_dates(plan, errors)
+    out_of_range = [
+        (path, value)
+        for path, value in all_dates
+        if value < range_start or value > range_end
+    ]
+
+    if out_of_range and status_code != "data_unavailable":
+        details = ", ".join(
+            f"{path}={value.isoformat()}" for path, value in out_of_range
+        )
+        errors.append(
+            {
+                "path": "status.code",
+                "message": (
+                    "存在超出正式数据范围"
+                    f"[{range_start.isoformat()}, {range_end.isoformat()}]"
+                    f"的必要日期：{details}；必须使用data_unavailable。"
+                ),
+            }
+        )
+
+    if status_code == "data_unavailable" and not out_of_range:
+        errors.append(
+            {
+                "path": "status.code",
+                "message": (
+                    "状态为data_unavailable，但计划中没有保留越界日期。"
+                ),
+            }
+        )
+
+    if status_code != "executable":
+        if operation_list:
+            errors.append(
+                {
+                    "path": "operations",
+                    "message": "非executable状态的operations必须为空。",
+                }
+            )
+        if check_list:
+            errors.append(
+                {
+                    "path": "checks",
+                    "message": "非executable状态的checks必须为空。",
+                }
+            )
+        return errors
+
+    output_to_operator: dict[str, str] = {}
+    operator_ids: list[str] = []
+
+    for index, operation in enumerate(operation_list):
+        if not isinstance(operation, dict):
+            continue
+
+        operator_id = operation.get("operator_id")
+        operator_ids.append(operator_id)
+        output_ref = operation.get("output_ref")
+        if isinstance(output_ref, str):
+            output_to_operator[output_ref] = operator_id
+
+        refs = operation.get("input_refs")
+        input_refs = refs if isinstance(refs, list) else []
+        raw_parameters = operation.get("parameters")
+        parameters = (
+            raw_parameters if isinstance(raw_parameters, dict) else {}
+        )
+
+        if operator_id == "OP001":
+            if (
+                len(input_refs) != 1
+                or not isinstance(input_refs[0], str)
+                or re.fullmatch(r"ZB\d{3}", input_refs[0]) is None
+            ):
+                errors.append(
+                    {
+                        "path": f"operations.{index}.input_refs",
+                        "message": "OP001必须严格包含一个正式ZB指标编号。",
+                    }
+                )
+
+            if "metric_id" in parameters:
+                errors.append(
+                    {
+                        "path": f"operations.{index}.parameters.metric_id",
+                        "message": "OP001指标必须写入input_refs，不得使用parameters.metric_id。",
+                    }
+                )
+
+            institution_id = parameters.get("institution_id")
+            institution_ids = parameters.get("institution_ids")
+            has_single = isinstance(institution_id, str)
+            has_multiple = isinstance(institution_ids, list)
+
+            if has_single == has_multiple:
+                errors.append(
+                    {
+                        "path": f"operations.{index}.parameters",
+                        "message": "OP001必须且只能使用institution_id或institution_ids之一。",
+                    }
+                )
+            elif has_single and re.fullmatch(r"ORG\d{3}", institution_id) is None:
+                errors.append(
+                    {
+                        "path": f"operations.{index}.parameters.institution_id",
+                        "message": "institution_id必须是正式ORG编号，不能使用all占位符。",
+                    }
+                )
+            elif has_multiple:
+                invalid_ids = [
+                    item
+                    for item in institution_ids
+                    if not isinstance(item, str)
+                    or re.fullmatch(r"ORG\d{3}", item) is None
+                ]
+                if invalid_ids:
+                    errors.append(
+                        {
+                            "path": f"operations.{index}.parameters.institution_ids",
+                            "message": f"institution_ids包含非法机构编号：{invalid_ids}",
+                        }
+                    )
+
+        if operator_id == "OP006":
+            if len(input_refs) != 2:
+                errors.append(
+                    {
+                        "path": f"operations.{index}.input_refs",
+                        "message": "OP006必须严格包含两个输入。",
+                    }
+                )
+            for field in ("numerator", "denominator"):
+                if field not in parameters:
+                    errors.append(
+                        {
+                            "path": (
+                                f"operations.{index}.parameters.{field}"
+                            ),
+                            "message": f"OP006缺少{field}。",
+                        }
+                    )
+
+        if operator_id == "OP007" and len(input_refs) != 2:
+            errors.append(
+                {
+                    "path": f"operations.{index}.input_refs",
+                    "message": "OP007必须按[本期值, 基期值]提供两个输入。",
+                }
+            )
+
+        if operator_id == "OP011":
+            if parameters.get("order") not in {
+                "ascending",
+                "descending",
+            }:
+                errors.append(
+                    {
+                        "path": f"operations.{index}.parameters.order",
+                        "message": "OP011.order只能是ascending或descending。",
+                    }
+                )
+
+        if operator_id == "OP012":
+            if parameters.get("performance_direction") not in {
+                "higher_is_better",
+                "lower_is_better",
+            }:
+                errors.append(
+                    {
+                        "path": (
+                            f"operations.{index}."
+                            "parameters.performance_direction"
+                        ),
+                        "message": (
+                            "OP012必须明确higher_is_better或"
+                            "lower_is_better。"
+                        ),
+                    }
+                )
+
+        if operator_id == "OP013":
+            if parameters.get("direction") not in {"top", "bottom"}:
+                errors.append(
+                    {
+                        "path": (
+                            f"operations.{index}.parameters.direction"
+                        ),
+                        "message": "OP013.direction只能是top或bottom。",
+                    }
+                )
+            if (
+                not isinstance(parameters.get("n"), int)
+                or parameters.get("n", 0) < 1
+            ):
+                errors.append(
+                    {
+                        "path": f"operations.{index}.parameters.n",
+                        "message": "OP013.n必须是正整数。",
+                    }
+                )
+            if (
+                len(input_refs) != 1
+                or output_to_operator.get(input_refs[0])
+                not in {"OP011", "OP012"}
+            ):
+                errors.append(
+                    {
+                        "path": f"operations.{index}.input_refs",
+                        "message": (
+                            "OP013必须接收OP011或OP012的唯一输出。"
+                        ),
+                    }
+                )
+
+        if operator_id in {"OP015", "OP016"}:
+            for field in (
+                "comparison_operator",
+                "threshold",
+                "unit",
+            ):
+                if field not in parameters:
+                    errors.append(
+                        {
+                            "path": (
+                                f"operations.{index}.parameters.{field}"
+                            ),
+                            "message": f"{operator_id}缺少{field}。",
+                        }
+                    )
+            if parameters.get("comparison_operator") not in {
+                ">",
+                ">=",
+                "<",
+                "<=",
+                "=",
+                "!=",
+            }:
+                errors.append(
+                    {
+                        "path": (
+                            f"operations.{index}."
+                            "parameters.comparison_operator"
+                        ),
+                        "message": "比较符必须使用标准符号。",
+                    }
+                )
+            if "condition" in parameters or "comparison" in parameters:
+                errors.append(
+                    {
+                        "path": f"operations.{index}.parameters",
+                        "message": (
+                            "不得使用condition或comparison自然语言字段。"
+                        ),
+                    }
+                )
+
+        if operator_id == "OP019" and len(input_refs) < 2:
+            errors.append(
+                {
+                    "path": f"operations.{index}.input_refs",
+                    "message": "OP019至少需要两个独立结果。",
+                }
+            )
+
+        if operator_id == "OP021":
+            if parameters.get("type") not in {
+                "previous_month_end",
+                "previous_quarter_end",
+                "previous_year_same_period",
+                "previous_year_end",
+                "year_begin_base",
+            }:
+                errors.append(
+                    {
+                        "path": f"operations.{index}.parameters.type",
+                        "message": "OP021.type不合法。",
+                    }
+                )
+            if not isinstance(parameters.get("reference_date"), str):
+                errors.append(
+                    {
+                        "path": (
+                            f"operations.{index}.parameters.reference_date"
+                        ),
+                        "message": "OP021缺少reference_date。",
+                    }
+                )
+
+    operator_set = set(operator_ids)
+
+    institutions = plan.get("institutions")
+    population = (
+        institutions.get("comparison_population", {})
+        if isinstance(institutions, dict)
+        else {}
+    )
+    population_type = (
+        population.get("type") if isinstance(population, dict) else None
+    )
+
+    if (
+        population_type == "all_official_institutions"
+        and any(word in question for word in ("平均", "均值"))
+        and "OP010" not in operator_set
+    ):
+        errors.append(
+            {
+                "path": "operations",
+                "message": "全省13家机构均值必须使用OP010。",
+            }
+        )
+
+    relative_count = 0
+    relative_count += int("环比" in question or "较上月" in question)
+    relative_count += int("同比" in question or "较去年同期" in question)
+    relative_count += int("较上季" in question)
+    relative_count += int("较年初" in question)
+
+    actual_op021 = operator_ids.count("OP021")
+    if relative_count and actual_op021 < relative_count:
+        errors.append(
+            {
+                "path": "operations",
+                "message": (
+                    f"题目包含{relative_count}个相对基期，至少需要"
+                    f"{relative_count}个OP021，实际为{actual_op021}个。"
+                ),
+            }
+        )
+
+    if any(word in question for word in ("走势", "趋势")):
+        if "OP018" not in operator_set:
+            errors.append(
+                {
+                    "path": "operations",
+                    "message": "走势或趋势问题必须使用OP018。",
+                }
+            )
+        if not has_check(plan, "unrounded_comparison"):
+            errors.append(
+                {
+                    "path": "checks",
+                    "message": "趋势分析缺少unrounded_comparison。",
+                }
+            )
+
+    asks_count_and_detail = (
+        "有几家" in question
+        and any(word in question for word in ("分别", "哪些", "哪几家"))
+    )
+    if asks_count_and_detail:
+        for required_operator in ("OP016", "OP017", "OP019"):
+            if required_operator not in operator_set:
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": (
+                            "筛选明细和数量必须包含OP016、OP017、OP019；"
+                            f"当前缺少{required_operator}。"
+                        ),
+                    }
+                )
+
+    if (
+        "环比" in question
+        and "同比" in question
+        and "OP019" not in operator_set
+    ):
+        errors.append(
+            {
+                "path": "operations",
+                "message": "环比和同比结果必须使用OP019合并。",
+            }
+        )
+
+    if any(word in question for word in ("监管要求", "最低要求")):
+        if "OP015" not in operator_set:
+            errors.append(
+                {
+                    "path": "operations",
+                    "message": "监管阈值判断必须使用OP015。",
+                }
+            )
+
+        op015_outputs = {
+            item.get("output_ref")
+            for item in operation_list
+            if isinstance(item, dict)
+            and item.get("operator_id") == "OP015"
+        }
+        for index, operation in enumerate(operation_list):
+            if (
+                isinstance(operation, dict)
+                and operation.get("operator_id") == "OP003"
+                and any(
+                    ref in op015_outputs
+                    for ref in operation.get("input_refs", [])
+                )
+            ):
+                errors.append(
+                    {
+                        "path": f"operations.{index}.input_refs",
+                        "message": (
+                            "OP015已返回达标结论和差距，"
+                            "不得再把其输出交给OP003。"
+                        ),
+                    }
+                )
+
+        metrics = plan.get("metrics")
+        requested = (
+            metrics.get("requested_metric_ids", [])
+            if isinstance(metrics, dict)
+            else []
+        )
+        expected_thresholds = {
+            "ZB013": (5, "<"),
+            "ZB015": (150, ">="),
+            "ZB016": (10.5, ">="),
+        }
+        for index, operation in enumerate(operation_list):
+            if (
+                isinstance(operation, dict)
+                and operation.get("operator_id") == "OP015"
+                and requested
+                and requested[0] in expected_thresholds
+            ):
+                expected_threshold, expected_operator = (
+                    expected_thresholds[requested[0]]
+                )
+                parameters = operation.get("parameters", {})
+                if parameters.get("threshold") != expected_threshold:
+                    errors.append(
+                        {
+                            "path": (
+                                f"operations.{index}.parameters.threshold"
+                            ),
+                            "message": "监管阈值与正式语言规则不一致。",
+                        }
+                    )
+                if (
+                    parameters.get("comparison_operator")
+                    != expected_operator
+                ):
+                    errors.append(
+                        {
+                            "path": (
+                                f"operations.{index}."
+                                "parameters.comparison_operator"
+                            ),
+                            "message": "监管比较符与正式语言规则不一致。",
+                        }
+                    )
+
+        if not has_check(plan, "unrounded_comparison"):
+            errors.append(
+                {
+                    "path": "checks",
+                    "message": "监管阈值判断缺少unrounded_comparison。",
+                }
+            )
+
+    if any(word in question for word in ("最好", "最差", "控制得最好")):
+        if "OP012" not in operator_set:
+            errors.append(
+                {
+                    "path": "operations",
+                    "message": "绩效好坏必须使用OP012。",
+                }
+            )
+        if (
+            re.search(r"\d+家|前\d+|后\d+", question)
+            and "OP013" not in operator_set
+        ):
+            errors.append(
+                {
+                    "path": "operations",
+                    "message": "绩效Top/Bottom N还必须使用OP013。",
+                }
+            )
+
+    numeric_top_n = (
+        re.search(r"(最高|最低).{0,4}\d+家", question) is not None
+        and not any(
+            word in question for word in ("最好", "最差", "控制得最好")
+        )
+    )
+    if numeric_top_n and not {"OP011", "OP013"}.issubset(operator_set):
+        errors.append(
+            {
+                "path": "operations",
+                "message": "纯数值Top/Bottom N必须先OP011再OP013。",
+            }
+        )
+
+    asks_extreme_day = (
+        "哪一天" in question
+        and any(word in question for word in ("最高", "最低", "最大", "最小"))
+    )
+    if asks_extreme_day:
+        time_plan = plan.get("time")
+        if not isinstance(time_plan, dict):
+            errors.append({"path": "time", "message": "缺少time对象。"})
+        else:
+            if time_plan.get("mode") != "range":
+                errors.append(
+                    {
+                        "path": "time.mode",
+                        "message": "期间极值日期必须使用range。",
+                    }
+                )
+            if time_plan.get("grain") != "day":
+                errors.append(
+                    {
+                        "path": "time.grain",
+                        "message": "询问哪一天必须使用day粒度。",
+                    }
+                )
+            if (
+                not time_plan.get("start_date")
+                or not time_plan.get("end_date")
+            ):
+                errors.append(
+                    {
+                        "path": "time",
+                        "message": "期间极值必须填写起止日期。",
+                    }
+                )
+
+            half_year_match = re.search(
+                r"(\d{4})年(上半年|下半年)",
+                question,
+            )
+            if half_year_match:
+                year = int(half_year_match.group(1))
+                half = half_year_match.group(2)
+                expected_start = (
+                    f"{year}-01-01"
+                    if half == "上半年"
+                    else f"{year}-07-01"
+                )
+                expected_end = (
+                    f"{year}-06-30"
+                    if half == "上半年"
+                    else f"{year}-12-31"
+                )
+                if time_plan.get("start_date") != expected_start:
+                    errors.append(
+                        {
+                            "path": "time.start_date",
+                            "message": f"正确起始日期应为{expected_start}。",
+                        }
+                    )
+                if time_plan.get("end_date") != expected_end:
+                    errors.append(
+                        {
+                            "path": "time.end_date",
+                            "message": f"正确结束日期应为{expected_end}。",
+                        }
+                    )
+
+        if "OP014" not in operator_set:
+            errors.append(
+                {
+                    "path": "operations",
+                    "message": "期间最高或最低日期必须使用OP014。",
+                }
+            )
+        for check_type in (
+            "date_completeness",
+            "unrounded_comparison",
+        ):
+            if not has_check(plan, check_type):
+                errors.append(
+                    {
+                        "path": "checks",
+                        "message": f"期间极值缺少{check_type}。",
+                    }
+                )
+
+    metric_check_types = {
+        "record_exists",
+        "metric_completeness",
+        "denominator_nonzero",
+        "unit_consistency",
+        "unrounded_comparison",
+        "tie_preservation",
+    }
+    for index, check in enumerate(check_list):
+        if not isinstance(check, dict):
+            continue
+        check_type = check.get("type")
+        parameters = check.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+
+        if "metric_id" in parameters:
+            errors.append(
+                {
+                    "path": f"checks.{index}.parameters.metric_id",
+                    "message": "检查参数不得使用metric_id，必须统一使用metric_ids数组。",
+                }
+            )
+
+        if check_type in metric_check_types:
+            metric_ids = parameters.get("metric_ids")
+            if not isinstance(metric_ids, list) or not metric_ids:
+                errors.append(
+                    {
+                        "path": f"checks.{index}.parameters.metric_ids",
+                        "message": f"{check_type}必须提供非空metric_ids数组。",
+                    }
+                )
+
+    return errors
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="手工版查询规划器单题测试")
+    parser.add_argument("--question", default=DEFAULT_QUESTION)
+    parser.add_argument("--env-file", type=Path, default=PROJECT_ROOT / ".env")
+    args = parser.parse_args()
+
+    config_dir = PROJECT_ROOT / "config" / "query_planner"
+    prompt_path = config_dir / "query_planner_prompt.md"
+    schema_path = config_dir / "query_plan.schema.json"
+    context_path = config_dir / "query_planner_context.json"
+
+    prompt = prompt_path.read_text(encoding="utf-8")
+    schema = load_json(schema_path)
+    context = load_json(context_path)
+
+    settings = Settings.from_env(args.env_file)
+    if not settings.llm_api_key:
+        raise SystemExit(
+            "未读取到BANKINSIGHT_LLM_API_KEY。请配置Codespaces Secret或本地.env。"
+        )
+
+    provider = DeepSeekLLMProvider(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+    )
+
+    user_prompt = "\n\n".join(
+        [
+            f"用户原始问题：\n{args.question}",
+            "正式语义上下文：\n"
+            + json.dumps(context, ensure_ascii=False, separators=(",", ":")),
+            "必须满足的JSON Schema：\n"
+            + json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
+        ]
+    )
+
+    response = provider.complete(
+        LLMRequest(
+            system_prompt=prompt,
+            user_prompt=user_prompt,
+            temperature=0.0,
+            timeout_seconds=settings.llm_timeout_seconds,
+            response_format="json_object",
+        )
+    )
+
+    try:
+        plan = parse_model_json(response.text)
+    except (ValueError, json.JSONDecodeError) as exc:
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "stage": "json_parse",
+                    "error": str(exc),
+                    "raw_output": response.text,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+
+    validator = Draft202012Validator(schema)
+    errors = sorted(validator.iter_errors(plan), key=lambda item: list(item.path))
+    error_payload = [
+        {
+            "path": ".".join(str(part) for part in error.path) or "$",
+            "message": error.message,
+        }
+        for error in errors
+    ]
+
+    business_errors = validate_business_rules(plan, context, args.question)
+    schema_valid = not errors
+    business_valid = not business_errors
+    success = schema_valid and business_valid
+
+    initial_validation = {
+        "schema_valid": schema_valid,
+        "schema_errors": error_payload,
+        "business_valid": business_valid,
+        "business_errors": business_errors,
+        "query_plan": plan,
+    }
+    repair_attempted = False
+    total_latency_ms = response.latency_ms
+
+    if not success:
+        repair_attempted = True
+        repair_prompt = "\n\n".join(
+            [
+                f"用户原始问题：\n{args.question}",
+                "正式语义上下文：\n"
+                + json.dumps(context, ensure_ascii=False, separators=(",", ":")),
+                "必须满足的JSON Schema：\n"
+                + json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
+                "上一版查询计划：\n"
+                + json.dumps(plan, ensure_ascii=False, separators=(",", ":")),
+                "上一版Schema错误：\n"
+                + json.dumps(error_payload, ensure_ascii=False, separators=(",", ":")),
+                "上一版业务错误：\n"
+                + json.dumps(business_errors, ensure_ascii=False, separators=(",", ":")),
+                "请只返回修正后的完整JSON对象，不得解释，不得遗漏任何顶层字段。",
+            ]
+        )
+        repair_response = provider.complete(
+            LLMRequest(
+                system_prompt=prompt,
+                user_prompt=repair_prompt,
+                temperature=0.0,
+                timeout_seconds=settings.llm_timeout_seconds,
+                response_format="json_object",
+            )
+        )
+        total_latency_ms += repair_response.latency_ms
+
+        try:
+            repaired_plan = parse_model_json(repair_response.text)
+        except (ValueError, json.JSONDecodeError):
+            repaired_plan = plan
+
+        repaired_schema_errors = sorted(
+            validator.iter_errors(repaired_plan),
+            key=lambda item: list(item.path),
+        )
+        error_payload = [
+            {
+                "path": ".".join(str(part) for part in error.path) or "$",
+                "message": error.message,
+            }
+            for error in repaired_schema_errors
+        ]
+        business_errors = validate_business_rules(
+            repaired_plan, context, args.question
+        )
+        schema_valid = not repaired_schema_errors
+        business_valid = not business_errors
+        success = schema_valid and business_valid
+        plan = repaired_plan
+
+    result = {
+        "success": success,
+        "question": args.question,
+        "model": response.model,
+        "latency_ms": total_latency_ms,
+        "repair_attempted": repair_attempted,
+        "initial_validation": initial_validation,
+        "schema_valid": schema_valid,
+        "schema_errors": error_payload,
+        "business_valid": business_valid,
+        "business_errors": business_errors,
+        "query_plan": plan,
+    }
+
+    output_dir = PROJECT_ROOT / "data" / "private" / "query_planner_runs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    output_path = output_dir / f"manual_single_{timestamp}.json"
+    output_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(f"\n结果已保存到：{output_path.relative_to(PROJECT_ROOT)}")
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

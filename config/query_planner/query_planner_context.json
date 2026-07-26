@@ -1,0 +1,578 @@
+{
+  "data_range": {
+    "start_date": "2024-12-31",
+    "end_date": "2026-04-30"
+  },
+  "institutions": [
+    {
+      "institution_id": "ORG001",
+      "institution_name": "江苏省A市农商行"
+    },
+    {
+      "institution_id": "ORG002",
+      "institution_name": "江苏省B市农商行"
+    },
+    {
+      "institution_id": "ORG003",
+      "institution_name": "江苏省C市农商行"
+    },
+    {
+      "institution_id": "ORG004",
+      "institution_name": "江苏省D市农商行"
+    },
+    {
+      "institution_id": "ORG005",
+      "institution_name": "江苏省E市农商行"
+    },
+    {
+      "institution_id": "ORG006",
+      "institution_name": "江苏省F市农商行"
+    },
+    {
+      "institution_id": "ORG007",
+      "institution_name": "江苏省G市农商行"
+    },
+    {
+      "institution_id": "ORG008",
+      "institution_name": "江苏省H市农商行"
+    },
+    {
+      "institution_id": "ORG009",
+      "institution_name": "江苏省I市农商行"
+    },
+    {
+      "institution_id": "ORG010",
+      "institution_name": "江苏省J市农商行"
+    },
+    {
+      "institution_id": "ORG011",
+      "institution_name": "江苏省K市农商行"
+    },
+    {
+      "institution_id": "ORG012",
+      "institution_name": "江苏省L市农商行"
+    },
+    {
+      "institution_id": "ORG013",
+      "institution_name": "江苏省M市农商行"
+    }
+  ],
+  "metrics": [
+    {
+      "metric_id": "ZB001",
+      "name": "各项存款余额",
+      "definition": "机构吸收的全部存款期末余额，包括对公存款和个人存款，反映机构资金来源总规模。",
+      "unit": "亿元"
+    },
+    {
+      "metric_id": "ZB002",
+      "name": "各项贷款余额",
+      "definition": "机构发放的全部贷款期末余额，包括对公贷款和个人贷款，反映机构信贷投放总规模。",
+      "unit": "亿元"
+    },
+    {
+      "metric_id": "ZB003",
+      "name": "对公存款余额",
+      "definition": "机构吸收的企业、机关团体等单位存款期末余额。",
+      "unit": "亿元"
+    },
+    {
+      "metric_id": "ZB004",
+      "name": "个人存款余额",
+      "definition": "机构吸收的个人储蓄存款期末余额，包括活期和定期储蓄存款。",
+      "unit": "亿元"
+    },
+    {
+      "metric_id": "ZB005",
+      "name": "对公贷款余额",
+      "definition": "向企业、事业单位等发放的贷款期末余额。",
+      "unit": "亿元"
+    },
+    {
+      "metric_id": "ZB006",
+      "name": "个人贷款余额",
+      "definition": "向个人发放的贷款期末余额，包括住房按揭、消费贷和经营性贷款等。",
+      "unit": "亿元"
+    },
+    {
+      "metric_id": "ZB007",
+      "name": "中间业务收入",
+      "definition": "机构通过代理、结算、托管、咨询等非利差业务实现的收入，不含利息收入。",
+      "unit": "万元"
+    },
+    {
+      "metric_id": "ZB008",
+      "name": "净利息收入",
+      "definition": "机构利息收入减去利息支出后的净额。",
+      "unit": "万元"
+    },
+    {
+      "metric_id": "ZB009",
+      "name": "营业收入",
+      "definition": "机构经营活动中实现的全部收入。",
+      "unit": "万元"
+    },
+    {
+      "metric_id": "ZB010",
+      "name": "营业支出",
+      "definition": "机构经营活动中发生的全部支出。",
+      "unit": "万元"
+    },
+    {
+      "metric_id": "ZB011",
+      "name": "净利润",
+      "definition": "营业收入扣除营业支出和所得税后的最终盈利。",
+      "unit": "万元"
+    },
+    {
+      "metric_id": "ZB012",
+      "name": "成本收入比",
+      "definition": "营业支出与营业收入的比值，数值越低通常表示经营效率越高。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB013",
+      "name": "不良贷款率",
+      "definition": "不良贷款余额占各项贷款余额的比例。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB014",
+      "name": "不良贷款余额",
+      "definition": "按五级分类认定的次级、可疑和损失类贷款余额。",
+      "unit": "亿元"
+    },
+    {
+      "metric_id": "ZB015",
+      "name": "拨备覆盖率",
+      "definition": "贷款损失准备金与不良贷款余额的比率。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB016",
+      "name": "资本充足率",
+      "definition": "资本净额与风险加权资产的比率。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB017",
+      "name": "逾期贷款率",
+      "definition": "逾期贷款余额占各项贷款余额的比例。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB018",
+      "name": "员工人数",
+      "definition": "机构在岗正式员工总数。",
+      "unit": "人"
+    },
+    {
+      "metric_id": "ZB019",
+      "name": "网点数量",
+      "definition": "机构下辖营业网点总数。",
+      "unit": "个"
+    },
+    {
+      "metric_id": "ZB020",
+      "name": "个人客户数",
+      "definition": "机构服务的个人客户总数。",
+      "unit": "户"
+    },
+    {
+      "metric_id": "ZB021",
+      "name": "对公客户数",
+      "definition": "机构服务的企业及机构客户总数。",
+      "unit": "户"
+    },
+    {
+      "metric_id": "ZB022",
+      "name": "存贷比",
+      "definition": "各项贷款余额÷各项存款余额×100%。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB023",
+      "name": "净利润率",
+      "definition": "净利润÷营业收入×100%。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB024",
+      "name": "对公存款占比",
+      "definition": "对公存款余额÷各项存款余额×100%。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB025",
+      "name": "个人存款占比",
+      "definition": "个人存款余额÷各项存款余额×100%。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB026",
+      "name": "对公贷款占比",
+      "definition": "对公贷款余额÷各项贷款余额×100%。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB027",
+      "name": "个人贷款占比",
+      "definition": "个人贷款余额÷各项贷款余额×100%。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB028",
+      "name": "客户总数",
+      "definition": "个人客户数与对公客户数之和。",
+      "unit": "户"
+    },
+    {
+      "metric_id": "ZB029",
+      "name": "人均利润",
+      "definition": "净利润÷员工人数。",
+      "unit": "万元/人"
+    },
+    {
+      "metric_id": "ZB030",
+      "name": "网点平均存款规模",
+      "definition": "各项存款余额换算为万元后÷网点数量。",
+      "unit": "万元/网点"
+    },
+    {
+      "metric_id": "ZB031",
+      "name": "日均存款余额",
+      "definition": "指定时间范围内每日各项存款余额的算术平均值。",
+      "unit": "亿元"
+    },
+    {
+      "metric_id": "ZB032",
+      "name": "日均贷款余额",
+      "definition": "指定时间范围内每日各项贷款余额的算术平均值。",
+      "unit": "亿元"
+    },
+    {
+      "metric_id": "ZB033",
+      "name": "日均净利润",
+      "definition": "指定时间范围内每日净利润记录的算术平均值。",
+      "unit": "万元"
+    },
+    {
+      "metric_id": "ZB034",
+      "name": "净利息收入占营业收入比重",
+      "definition": "净利息收入÷营业收入×100%。",
+      "unit": "%"
+    },
+    {
+      "metric_id": "ZB035",
+      "name": "净利息收入与中间业务收入合计",
+      "definition": "净利息收入与中间业务收入之和。",
+      "unit": "万元"
+    }
+  ],
+  "operators": [
+    {
+      "operator_id": "OP001",
+      "name": "直接取值",
+      "definition": "按机构、指标和日期读取原始指标值。"
+    },
+    {
+      "operator_id": "OP002",
+      "name": "求和",
+      "definition": "对口径一致、单位一致的数值求和。"
+    },
+    {
+      "operator_id": "OP003",
+      "name": "定向差值",
+      "definition": "A比B多多少为A-B；A比B少多少为B-A。"
+    },
+    {
+      "operator_id": "OP004",
+      "name": "绝对差值",
+      "definition": "计算|A-B|。"
+    },
+    {
+      "operator_id": "OP005",
+      "name": "结构核对差额",
+      "definition": "使用未舍入原始值计算总量减分项合计，同时返回total_value、component_sum、difference和is_equal；difference=total_value-component_sum，is_equal表示difference是否严格等于0。"
+    },
+    {
+      "operator_id": "OP006",
+      "name": "比例",
+      "definition": "分子÷分母×100%。"
+    },
+    {
+      "operator_id": "OP007",
+      "name": "增幅",
+      "definition": "（本期值－基期值）÷基期值×100%。"
+    },
+    {
+      "operator_id": "OP008",
+      "name": "百分点变化",
+      "definition": "两个百分比指标直接相减。"
+    },
+    {
+      "operator_id": "OP009",
+      "name": "期间日均",
+      "definition": "指定期间每日有效记录的算术平均。"
+    },
+    {
+      "operator_id": "OP010",
+      "name": "全省均值",
+      "definition": "同日同指标13家机构均值。"
+    },
+    {
+      "operator_id": "OP011",
+      "name": "数值排序",
+      "definition": "按数值升序或降序，不包含好坏评价。"
+    },
+    {
+      "operator_id": "OP012",
+      "name": "绩效排名",
+      "definition": "成本收入比、不良贷款率、逾期贷款率越低越好，其余暂按越高越好。"
+    },
+    {
+      "operator_id": "OP013",
+      "name": "Top/Bottom N",
+      "definition": "取排序后的前N项或后N项。"
+    },
+    {
+      "operator_id": "OP014",
+      "name": "极值",
+      "definition": "求最大值或最小值，并返回对应机构与日期。"
+    },
+    {
+      "operator_id": "OP015",
+      "name": "阈值比较",
+      "definition": "与明确阈值比较，返回是否达标和差距。"
+    },
+    {
+      "operator_id": "OP016",
+      "name": "条件筛选",
+      "definition": "保留满足条件的机构或日期记录。"
+    },
+    {
+      "operator_id": "OP017",
+      "name": "计数",
+      "definition": "统计筛选后的机构、日期或记录数量。"
+    },
+    {
+      "operator_id": "OP018",
+      "name": "趋势分析",
+      "definition": "按时间顺序识别上升、下降、波动和转折。"
+    },
+    {
+      "operator_id": "OP019",
+      "name": "多结果合并",
+      "definition": "组合多个相对独立的查询或分析结果。"
+    },
+    {
+      "operator_id": "OP020",
+      "name": "单位换算",
+      "definition": "计算前统一单位。"
+    },
+    {
+      "operator_id": "OP021",
+      "name": "基期定位",
+      "definition": "定位上月末、上季末、去年同期或上一年末。"
+    }
+  ],
+  "business_concepts": [
+    {
+      "concept_id": "BC001",
+      "name": "主要经营指标",
+      "related_metric_ids": [
+        "ZB022",
+        "ZB013",
+        "ZB015",
+        "ZB016",
+        "ZB017",
+        "ZB011",
+        "ZB012"
+      ],
+      "status": "待项目确认"
+    },
+    {
+      "concept_id": "BC002",
+      "name": "表现较好",
+      "related_metric_ids": [],
+      "status": "已有官方口径",
+      "definition": "某项指标绩效排名进入全省前3名。"
+    },
+    {
+      "concept_id": "BC003",
+      "name": "表现较差",
+      "related_metric_ids": [],
+      "status": "已有官方口径",
+      "definition": "某项指标绩效排名进入全省后4名。"
+    },
+    {
+      "concept_id": "BC004",
+      "name": "规模",
+      "related_metric_ids": [
+        "ZB001",
+        "ZB002"
+      ],
+      "status": "待项目确认"
+    },
+    {
+      "concept_id": "BC005",
+      "name": "资产质量",
+      "related_metric_ids": [
+        "ZB013",
+        "ZB014",
+        "ZB015",
+        "ZB017"
+      ],
+      "status": "待项目确认"
+    },
+    {
+      "concept_id": "BC006",
+      "name": "盈利能力",
+      "related_metric_ids": [
+        "ZB007",
+        "ZB008",
+        "ZB009",
+        "ZB010",
+        "ZB011",
+        "ZB012",
+        "ZB023",
+        "ZB034",
+        "ZB035"
+      ],
+      "status": "待项目确认"
+    },
+    {
+      "concept_id": "BC007",
+      "name": "收入结构",
+      "related_metric_ids": [
+        "ZB007",
+        "ZB008",
+        "ZB009",
+        "ZB034"
+      ],
+      "status": "待项目确认"
+    }
+  ],
+  "language_rules": [
+    {
+      "rule_id": "LR001",
+      "expression": "A比B多多少",
+      "interpretation": "调用OP003，计算A-B。"
+    },
+    {
+      "rule_id": "LR002",
+      "expression": "A比B少多少",
+      "interpretation": "调用OP003，计算B-A。"
+    },
+    {
+      "rule_id": "LR003",
+      "expression": "A与B相差多少／差多少",
+      "interpretation": "调用OP004，计算|A-B|；比率类输出百分点。"
+    },
+    {
+      "rule_id": "LR004",
+      "expression": "与全省均值比，是高还是低、差多少",
+      "interpretation": "目标机构值－全省均值。"
+    },
+    {
+      "rule_id": "LR005",
+      "expression": "变化多少／变动多少／增加多少／减少多少",
+      "interpretation": "默认绝对变化，不等同于增幅。"
+    },
+    {
+      "rule_id": "LR006",
+      "expression": "增幅／增长百分之多少／变化了百分之多少",
+      "interpretation": "调用OP007。"
+    },
+    {
+      "rule_id": "LR007",
+      "expression": "较上月／环比",
+      "interpretation": "OP021定位上月末，再执行比较。"
+    },
+    {
+      "rule_id": "LR008",
+      "expression": "较上季",
+      "interpretation": "OP021定位上季末。"
+    },
+    {
+      "rule_id": "LR009",
+      "expression": "同比／较去年同期／较同期",
+      "interpretation": "OP021定位上一年同月同日。"
+    },
+    {
+      "rule_id": "LR010",
+      "expression": "较年初／从年初到本期",
+      "interpretation": "基期为本期年份上一年12月31日。"
+    },
+    {
+      "rule_id": "LR011",
+      "expression": "日均／全年均值／季度均值",
+      "interpretation": "调用OP009并检查日期完整性。"
+    },
+    {
+      "rule_id": "LR012",
+      "expression": "排名前三／排名后三／排第几",
+      "interpretation": "调用OP012和OP013。"
+    },
+    {
+      "rule_id": "LR013",
+      "expression": "最高／最低／最大／最小",
+      "interpretation": "纯数值极值，调用OP014。"
+    },
+    {
+      "rule_id": "LR014",
+      "expression": "最好／最差／控制得最好",
+      "interpretation": "按指标方向进行绩效评价。"
+    },
+    {
+      "rule_id": "LR015",
+      "expression": "全省／13家农商行／哪家农商行",
+      "interpretation": "范围为ORG001至ORG013。"
+    },
+    {
+      "rule_id": "LR016",
+      "expression": "月末／月底／季度末／年末／年底",
+      "interpretation": "转换为对应自然期间最后一日。"
+    },
+    {
+      "rule_id": "LR017",
+      "expression": "存款／存款总额",
+      "interpretation": "映射ZB001。"
+    },
+    {
+      "rule_id": "LR018",
+      "expression": "贷款／贷款总额",
+      "interpretation": "映射ZB002。"
+    },
+    {
+      "rule_id": "LR019",
+      "expression": "不良率",
+      "interpretation": "映射ZB013。"
+    },
+    {
+      "rule_id": "LR020",
+      "expression": "不良贷款余额占贷款总额的比例",
+      "interpretation": "优先映射ZB013。"
+    },
+    {
+      "rule_id": "LR021",
+      "expression": "总量与分项是否相等，差额多少",
+      "interpretation": "调用OP005，总量－分项合计。"
+    },
+    {
+      "rule_id": "LR022",
+      "expression": "达到监管要求／满足最低要求",
+      "interpretation": "不良贷款率<5%；拨备覆盖率>=150%；资本充足率>=10.5%。"
+    },
+    {
+      "rule_id": "LR023",
+      "expression": "大不大／高不高／好不好且未给比较对象",
+      "interpretation": "标记clarification_required。"
+    },
+    {
+      "rule_id": "LR024",
+      "expression": "主要经营指标／规模／资产质量／盈利能力／收入结构",
+      "interpretation": "查询业务概念字典；待确认时不得自行扩展。"
+    }
+  ]
+}
