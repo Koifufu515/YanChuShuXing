@@ -102,6 +102,7 @@ class QueryAPITest(unittest.TestCase):
                         "warnings",
                         "error",
                         "metadata",
+                        "confirmation",
                     },
                 )
 
@@ -227,6 +228,7 @@ class QueryAPITest(unittest.TestCase):
                         "warnings",
                         "error",
                         "metadata",
+                        "confirmation",
                     },
                 )
 

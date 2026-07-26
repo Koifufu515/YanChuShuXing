@@ -12,6 +12,7 @@ class QueryRequestDTO(BaseModel):
     question: str
     user_id: str = Field(min_length=1, max_length=64)
     conversation_id: str | None = Field(default=None, max_length=128)
+    confirmation: dict[str, Any] | None = None
 
     @field_validator("question")
     @classmethod
@@ -38,6 +39,7 @@ class QueryResponseDTO(BaseModel):
     warnings: list[str]
     error: ErrorDTO | None
     metadata: dict[str, Any] | None = None
+    confirmation: dict[str, Any] | None = None
 
     @classmethod
     def from_outcome(cls, outcome: QueryOutcome) -> "QueryResponseDTO":
@@ -52,4 +54,5 @@ class QueryResponseDTO(BaseModel):
             warnings=outcome.warnings,
             error=error,
             metadata=asdict(outcome.metadata) if outcome.metadata else None,
+            confirmation=outcome.confirmation,
         )

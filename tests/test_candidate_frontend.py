@@ -111,6 +111,23 @@ class CandidateFrontendContractTest(unittest.TestCase):
         self.assertIn("axisLabels: labels", self.adapter)
         self.assertIn('metricName: cell(row, model.indexes.metric) || "指标值"', self.adapter)
 
+    def test_confirmation_card_and_persistence_use_the_same_conversation(self) -> None:
+        for marker in (
+            "confirmation-card",
+            "confirmationSelections",
+            "confirmationEvents",
+            "确认并查询",
+            "修改问题",
+            "最终采用条件",
+            'confirmation:{token:confirmation.token,selections}',
+        ):
+            self.assertIn(marker, self.javascript)
+        self.assertIn("localStorage.setItem(STORAGE_KEY", self.javascript)
+        self.assertIn("localStorage.getItem(STORAGE_KEY", self.javascript)
+        self.assertIn('payload.error?.code==="CLARIFICATION_REQUIRED"', self.javascript)
+        self.assertIn("state-needs_confirmation", self.css)
+        self.assertIn("state-unrecognized", self.css)
+
 
 if __name__ == "__main__":
     unittest.main()

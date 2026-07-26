@@ -16,6 +16,7 @@ from app.ports.database_executor import DatabaseExecutor
 from app.ports.result_formatter import ResultFormatter
 from app.ports.sql_generator import SQLGenerator
 from app.ports.sql_safety import SQLSafetyChecker
+from app.ports.intent_confirmation import IntentConfirmationResolver
 
 
 class QueryPipeline:
@@ -27,6 +28,7 @@ class QueryPipeline:
         database_executor: DatabaseExecutor,
         result_formatter: ResultFormatter,
         audit_logger: AuditLogger,
+        intent_confirmation_resolver: IntentConfirmationResolver | None = None,
     ) -> None:
         self.context_resolver = context_resolver
         self.sql_generator = sql_generator
@@ -34,13 +36,37 @@ class QueryPipeline:
         self.database_executor = database_executor
         self.result_formatter = result_formatter
         self.audit_logger = audit_logger
+        self.intent_confirmation_resolver = intent_confirmation_resolver
 
     def run(self, command: QueryCommand) -> QueryOutcome:
         self._record(command, "request_started")
         sql: str | None = None
         try:
-            context = self.context_resolver.resolve(command.question)
-            generated = self.sql_generator.generate(command.question, context)
+            execution_question = command.question
+            confirmation_payload = None
+            if self.intent_confirmation_resolver is not None:
+                resolution = self.intent_confirmation_resolver.resolve(
+                    command.question, command.confirmation
+                )
+                confirmation_payload = resolution.confirmation
+                if resolution.status == "required":
+                    error = ErrorDetail(
+                        code="CLARIFICATION_REQUIRED",
+                        message="请确认缺少或存在歧义的分析条件后再查询。",
+                        retryable=False,
+                    )
+                    self._record(command, "clarification_required", error_code=error.code)
+                    return QueryOutcome(
+                        request_id=command.request_id,
+                        question=command.question,
+                        sql=None,
+                        error=error,
+                        confirmation=confirmation_payload,
+                    )
+                if resolution.execution_question:
+                    execution_question = resolution.execution_question
+            context = self.context_resolver.resolve(execution_question)
+            generated = self.sql_generator.generate(execution_question, context)
             sql = generated.sql
             safety = self.safety_checker.validate(
                 generated.sql,
@@ -77,6 +103,13 @@ class QueryPipeline:
                 generated.sql, generated.parameters, max_rows=1000
             )
             formatted = self.result_formatter.format(command.question, result)
+            summary = formatted.summary
+            if confirmation_payload and confirmation_payload.get("status") == "confirmed":
+                conditions = confirmation_payload.get("final_conditions", {})
+                metric = conditions.get("metric", {}).get("label", "暂未提供")
+                period = conditions.get("comparison_period", {})
+                prefix = f"最终采用条件：{metric}，{period.get('start_date', '暂未提供')} 至 {period.get('end_date', '暂未提供')}，按增长额进行机构排名。"
+                summary = f"{prefix}{summary or ''}"
             self._record(command, "query_succeeded", sql=sql)
             return QueryOutcome(
                 request_id=command.request_id,
@@ -84,7 +117,7 @@ class QueryPipeline:
                 sql=sql,
                 columns=result.columns,
                 rows=result.rows,
-                summary=formatted.summary,
+                summary=summary,
                 warnings=[*warnings, *formatted.warnings],
                 metadata=(
                     replace(
@@ -94,6 +127,7 @@ class QueryPipeline:
                     if generated.metadata
                     else None
                 ),
+                confirmation=confirmation_payload,
             )
         except ApplicationError as exc:
             error = ErrorDetail(
@@ -108,6 +142,7 @@ class QueryPipeline:
                 sql=sql,
                 error=error,
                 metadata=exc.metadata,
+                confirmation=None,
             )
         except Exception:
             self._record(command, "query_failed", sql=sql, error_code="INTERNAL_ERROR")

@@ -28,6 +28,11 @@ TREND_PATTERN = re.compile(
     r"^查询(?P<institution>.+?)从(?P<start_date>\d{4}-\d{2}-\d{2})到"
     r"(?P<end_date>\d{4}-\d{2}-\d{2})的(?P<metric>.+?)趋势$"
 )
+CONFIRMED_GROWTH_RANKING_PATTERN = re.compile(
+    r"^__confirmed_growth_ranking__:(?P<metric_id>[A-Za-z0-9_-]+):"
+    r"(?P<start_date>\d{4}-\d{2}-\d{2}):(?P<end_date>\d{4}-\d{2}-\d{2}):"
+    r"(?P<method>absolute_change)$"
+)
 
 
 class RealRuleSQLGenerator:
@@ -38,6 +43,55 @@ class RealRuleSQLGenerator:
     def generate(self, question: str, context: QueryContext) -> GeneratedSQL:
         compact = _normalize(question)
         metrics, institutions = _catalogs(context)
+
+        matched = CONFIRMED_GROWTH_RANKING_PATTERN.fullmatch(compact)
+        if matched:
+            metric_id = matched.group("metric_id")
+            if metric_id not in set(metrics.values()):
+                raise UnsupportedQuestionError("确认指标不在当前正式目录中。")
+            start_date = _valid_date(matched.group("start_date"))
+            end_date = _valid_date(matched.group("end_date"))
+            if start_date >= end_date:
+                raise UnsupportedQuestionError("增长排名的开始日期必须早于结束日期。")
+            return GeneratedSQL(
+                sql="""
+                    WITH boundary_values AS (
+                        SELECT institution_id,
+                               MAX(CASE WHEN data_date = :start_date THEN metric_value_scaled END) AS start_value_scaled,
+                               MAX(CASE WHEN data_date = :end_date THEN metric_value_scaled END) AS end_value_scaled
+                        FROM metric_facts
+                        WHERE metric_id = :metric_id
+                          AND data_date IN (:start_date, :end_date)
+                        GROUP BY institution_id
+                    )
+                    SELECT i.institution_name,
+                           m.metric_name,
+                           :end_date AS data_date,
+                           scaled_value(b.end_value_scaled - b.start_value_scaled, m.value_scale) AS metric_value,
+                           m.metric_unit
+                    FROM boundary_values AS b
+                    JOIN institutions AS i USING(institution_id)
+                    JOIN metrics AS m ON m.metric_id = :metric_id
+                    WHERE b.start_value_scaled IS NOT NULL
+                      AND b.end_value_scaled IS NOT NULL
+                    ORDER BY metric_value DESC, i.institution_id ASC
+                """.strip(),
+                parameters={
+                    "metric_id": metric_id,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                generator_name=self.name,
+                metadata=_metadata(
+                    "排名",
+                    "bar",
+                    "metric_growth_ranking",
+                    metric_id,
+                    None,
+                    {"start": start_date, "end": end_date},
+                    comparison="absolute_change",
+                ),
+            )
 
         matched = SINGLE_PATTERN.fullmatch(compact)
         if matched:
@@ -197,6 +251,7 @@ def _metadata(
     metric_id: str,
     institution_id: str | None,
     time_range: dict[str, str],
+    comparison: str | None = None,
 ) -> QueryMetadata:
     filters = {"institution_id": institution_id} if institution_id else {}
     return QueryMetadata(
@@ -214,5 +269,6 @@ def _metadata(
             filters=filters,
             time_range=time_range,
             confidence=1.0,
+            comparison=comparison,
         ),
     )

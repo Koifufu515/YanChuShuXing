@@ -14,6 +14,7 @@ from app.adapters.generation.hybrid_generator import HybridSQLGenerator
 from app.adapters.generation.llm_generator import LLMSQLGenerator
 from app.adapters.generation.real_rule_generator import RealRuleSQLGenerator
 from app.adapters.generation.rule_generator import RuleSQLGenerator
+from app.adapters.intent_confirmation import RealIntentConfirmationResolver
 from app.adapters.llm.deepseek_provider import DeepSeekLLMProvider
 from app.adapters.safety.sqlglot_checker import SQLGlotSafetyChecker
 from app.application.pipeline import QueryPipeline
@@ -62,6 +63,11 @@ def build_pipeline(
             RealResultFormatter() if is_real else TemplateResultFormatter()
         ),
         audit_logger=NoOpAuditLogger(),
+        intent_confirmation_resolver=(
+            RealIntentConfirmationResolver(resolved_database)
+            if is_real and resolved_settings.generator_mode == "rule"
+            else None
+        ),
     )
 
 

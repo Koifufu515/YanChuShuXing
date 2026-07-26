@@ -151,6 +151,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_candidate_frontend.ps1 -G
 
 浏览器访问 `http://127.0.0.1:8512/candidate`。页面图表使用仓库内的 `candidate_frontend/echarts.min.js`，运行时不访问 CDN；结果适配器只按 `metric_value`、`metric_unit`、`metric_name`、`institution_name`、`data_date` 五个字段名取值，不依赖列顺序。停止该 8512 进程即可回退，不影响原 Streamlit 页面。
 
+候选版支持真实意图确认：明确的单值、排名和趋势问题仍直接查询；问题存在歧义或缺少条件时，同一个 `POST /api/v1/query` 返回 `CLARIFICATION_REQUIRED`、`sql=null` 和正式目录候选。前端在原聊天轮次中完成选择，再通过可选 `confirmation` 字段提交确认。详细协议、验收证据和限制见 [候选意图确认接口与验收报告](docs/product/候选意图确认接口与验收报告.md)。
+
 本地图表 DOM 审计可选运行：
 
 ```powershell
@@ -197,6 +199,7 @@ PYTHONPATH=backend:. .venv/bin/python scripts/deepseek_smoke_test.py
 - [04号正式数据底座与数据库建设](docs/04_正式数据底座与数据库建设.md)
 - [05号业务语义与题库标准](docs/05_业务语义与题库标准.md)
 - [06号系统测试与版本评测](docs/06_系统测试与版本评测.md)
+- [候选意图确认接口与验收报告](docs/product/候选意图确认接口与验收报告.md)
 - [竞赛数据与智算平台资料使用说明](docs/竞赛数据与智算平台资料使用说明.md)
 - [团队分工与协作规范](docs/团队分工与协作规范.md)
 - [贡献与提交流程](CONTRIBUTING.md)

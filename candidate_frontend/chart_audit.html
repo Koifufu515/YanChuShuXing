@@ -45,6 +45,8 @@
         assert(new Set(rankingOption.yAxis.data).size === 13, "排名机构名称不重复");
         assert(rankingOption.xAxis.min === 0, "排名数值轴从零开始");
         assert(!Object.prototype.hasOwnProperty.call(rankingOption.yAxis.axisLabel, "overflow"), "排名机构名称不截断");
+        const negativeRanking = adapter.rankingOption(adapter.adapt({ columns, rows: [["亿元", "2026-06-30", "江苏省A市农商行", -2, "各项贷款余额"], ["亿元", "2026-06-30", "江苏省B市农商行", 3, "各项贷款余额"]] }));
+        assert(negativeRanking.xAxis.min === -2, "增长排名包含负值时保留负值并包含零轴");
 
         const trendRows = Array.from({ length: 486 }, (_, index) => [
           "亿元", dateText(index), "江苏省A市农商行", index - 243, "各项存款余额",

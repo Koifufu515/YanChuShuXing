@@ -29,6 +29,7 @@ def query(
             user_id=request.user_id,
             conversation_id=request.conversation_id,
             request_id=f"req_{uuid4().hex}",
+            confirmation=request.confirmation,
         )
     )
     response.status_code = _status_for(outcome.error.code if outcome.error else None)
@@ -42,6 +43,7 @@ def _status_for(error_code: str | None) -> int:
         "INVALID_QUESTION": 400,
         "UNSUPPORTED_QUESTION": 400,
         "CLARIFICATION_REQUIRED": 400,
+        "INVALID_CONFIRMATION": 400,
         "UNSUPPORTED_METRIC": 400,
         "SQL_REJECTED": 403,
         "ACCESS_DENIED": 403,

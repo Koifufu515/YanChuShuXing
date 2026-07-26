@@ -111,11 +111,12 @@
     const items = ranking(model);
     const unit = items[0]?.unit || "";
     const displayed = items.slice().reverse();
+    const minimum = items.length ? Math.min(0, ...items.map(item => item.value)) : 0;
     return {
       animation: false,
       tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, ...tooltip, valueFormatter: value => `${formatNumber(value)}${unit ? ` ${unit}` : ""}` },
       grid: { left: 142, right: 36, top: 18, bottom: 42, containLabel: false },
-      xAxis: { type: "value", min: 0, splitNumber: 5, name: unit ? `单位：${unit}` : "", nameLocation: "middle", nameGap: 28, axisLine, axisLabel: { color: "#667085", fontSize: 10, formatter: compactNumber }, splitLine },
+      xAxis: { type: "value", min: minimum, splitNumber: 5, name: unit ? `单位：${unit}` : "", nameLocation: "middle", nameGap: 28, axisLine, axisLabel: { color: "#667085", fontSize: 10, formatter: compactNumber }, splitLine },
       yAxis: { type: "category", data: displayed.map(item => item.institution), axisLine, axisTick: { show: false }, axisLabel: { color: "#475467", fontSize: 10 } },
       series: [{ type: "bar", barMaxWidth: 18, data: displayed.map((item, index) => ({ value: item.value, itemStyle: { color: index === displayed.length - 1 ? "#1577E0" : "#77AFE9", borderRadius: [0, 4, 4, 0] } })) }],
     };

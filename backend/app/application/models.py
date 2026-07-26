@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 JsonScalar = str | int | float | bool | None
@@ -12,6 +13,7 @@ class QueryCommand:
     user_id: str
     conversation_id: str | None
     request_id: str
+    confirmation: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class SemanticMetadata:
     filters: dict[str, JsonScalar]
     time_range: dict[str, JsonScalar] | None
     confidence: float | None = None
+    comparison: str | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +120,14 @@ class QueryOutcome:
     warnings: list[str] = field(default_factory=list)
     error: ErrorDetail | None = None
     metadata: QueryMetadata | None = None
+    confirmation: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class IntentResolution:
+    status: str
+    confirmation: dict[str, Any] | None = None
+    execution_question: str | None = None
 
 
 @dataclass(frozen=True)

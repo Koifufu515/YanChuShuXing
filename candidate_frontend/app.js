@@ -158,16 +158,54 @@
     });
   }
 
+  const confirmationStateLabels = { recognized:"已识别", needs_confirmation:"需要确认", missing:"缺少条件", unrecognized:"未识别" };
+
+  function finalConditionsText(confirmation) {
+    const values=confirmation?.final_conditions||{};
+    const period=values.comparison_period||{};
+    return [values.metric?.label,values.analysis?.label,values.growth_method?.label,period.start_date&&period.end_date?`${period.start_date} 至 ${period.end_date}`:null,values.institution_scope?.label].filter(Boolean).join("；");
+  }
+
+  function renderConfirmation(turn,index,payload) {
+    const confirmation=payload.confirmation||{};
+    const box=node("section","confirmation-card");
+    box.append(node("p","confirmation-original",`原问题：${confirmation.original_question||turn.question}`));
+    box.append(node("p","confirmation-summary",confirmation.summary||"请确认分析条件。"));
+    const fields=node("div","confirmation-fields");
+    (confirmation.fields||[]).forEach(field=>{
+      const row=node("label","confirmation-field");
+      const head=node("span","confirmation-label"); head.append(node("strong","",field.label),node("em",`state-${field.state}`,confirmationStateLabels[field.state]||"暂未提供")); row.append(head);
+      if(field.value){ row.append(node("span","confirmed-value",field.value.label||field.value.id)); }
+      else {
+        const select=node("select","confirmation-select"); select.dataset.confirmField=field.key; select.dataset.turnIndex=String(index); select.disabled=!(field.options||[]).length;
+        const placeholder=node("option","",(field.options||[]).length?`请选择${field.label}`:"暂无可用候选"); placeholder.value=""; select.append(placeholder);
+        (field.options||[]).forEach(option=>{const item=node("option","",option.label);item.value=option.id;if(turn.confirmationSelections?.[field.key]===option.id)item.selected=true;select.append(item);});
+        row.append(select);
+      }
+      fields.append(row);
+    });
+    box.append(fields);
+    const actions=node("div","confirmation-actions");
+    const confirm=node("button","primary confirmation-submit","确认并查询");confirm.type="button";confirm.dataset.confirmTurn=String(index);
+    const required=(confirmation.fields||[]).filter(field=>field.required!==false&&!field.value);
+    confirm.disabled=required.some(field=>!turn.confirmationSelections?.[field.key]);
+    const edit=node("button","ghost confirmation-edit","修改问题");edit.type="button";edit.dataset.editTurn=String(index);
+    actions.append(confirm,edit);box.append(actions);
+    return box;
+  }
+
   function renderAnswer(turn, index) {
     const row = node("article", "message assistant"); row.append(node("span", "bot-avatar", "AI"));
-    const card = node("button", `answer-card${state.selectedTurn === index ? " selected" : ""}`); card.type = "button"; card.dataset.turnIndex = String(index);
+    const card = node("div", `answer-card${state.selectedTurn === index ? " selected" : ""}`); card.dataset.turnIndex = String(index); card.tabIndex=0;
     const top = node("div", "answer-top"); top.append(node("strong", "", "AI 分析助手"));
     if (turn.pending) { top.append(node("span", "result-chip", "查询中")); top.append(node("small", "", "正在连接真实服务")); card.append(top); const body=node("div","answer-body"); body.append(node("p","answer-summary","正在理解问题并查询数据……")); card.append(body); row.append(card); return row; }
-    const payload = turn.payload || {}; const view = buildView(payload); top.append(node("span", "result-chip", payload.error ? "未完成" : view.resultType)); top.append(node("small", "", `${Number(turn.elapsedMs || 0)} ms`)); card.append(top);
+    const payload = turn.payload || {}; const view = buildView(payload); const waiting=payload.error?.code==="CLARIFICATION_REQUIRED"&&payload.confirmation; top.append(node("span", "result-chip", waiting?(Object.keys(turn.confirmationSelections||{}).length?"选择中":"待确认"):(payload.error ? "未完成" : view.resultType))); top.append(node("small", "", `${Number(turn.elapsedMs || 0)} ms`)); card.append(top);
     const body = node("div", "answer-body");
-    if (payload.error) {
+    if(waiting){ body.append(renderConfirmation(turn,index,payload)); }
+    else if (payload.error) {
       const spec = state.contract.error_states[payload.error.code] || ["查询失败", "查询未完成，请稍后重试。"]; const error = node("div", "error-card"); error.append(node("strong", "", spec[0])); error.append(node("span", "", payload.error.message || spec[1])); body.append(error);
     } else {
+      if(payload.confirmation?.status==="confirmed") { const final=node("section","final-conditions");final.append(node("strong","","最终采用条件"),node("span","",finalConditionsText(payload.confirmation)));body.append(final); }
       body.append(node("p", "answer-summary", view.summary));
       if (view.resultType === "单值") { const single=adapter.singleValue(view.model); if(single){ const grid=node("div","kpi-grid"); const item=node("div","kpi"); item.append(node("span","",single.metricName)); item.append(node("strong","",single.valueText)); grid.append(item); body.append(grid); } }
       const chart = makeChart(view); if (chart) body.append(chart);
@@ -188,10 +226,11 @@
   function renderDetails() {
     const root=$("#detail-content"); root.replaceChildren(); const conversation=activeConversation(); const turn=conversation?.turns?.[state.selectedTurn];
     if (!turn || turn.pending) { $("#detail-status").textContent=turn?.pending?"查询中":"未查询"; root.append(node("div","detail-empty",turn?.pending?"查询完成后将在这里显示执行信息。":"点击一条 AI 回答查看对应执行详情。")); return; }
-    const payload=turn.payload||{}, view=buildView(payload), metadata=payload.metadata||{}, semantic=metadata.semantic||{}, security=metadata.security||{};
+    const payload=turn.payload||{}, view=buildView(payload), metadata=payload.metadata||{}, semantic=metadata.semantic||{}, security=metadata.security||{}, confirmation=payload.confirmation||{};
     $("#detail-status").textContent=payload.error?"未完成":"已返回";
     const overview=node("section","detail-group"); overview.append(node("h3","","本轮概览")); kv(overview,"查询耗时",metadata.query_duration_ms==null?"暂未提供":`${metadata.query_duration_ms} ms`); kv(overview,"完整响应",`${Number(turn.elapsedMs||0)} ms`); kv(overview,"结果类型",view.resultType); kv(overview,"推荐图表",view.chart==="none"?"无需图表":view.chart); kv(overview,"请求编号",payload.request_id); root.append(overview);
     const understanding=node("section","detail-group"); understanding.append(node("h3","","系统理解")); kv(understanding,"指标",semantic.metrics); kv(understanding,"机构",semantic.filters?.institution || semantic.filters?.institution_id || semantic.institutions); kv(understanding,"时间",semantic.time_range); kv(understanding,"比较方式",semantic.comparison); root.append(understanding);
+    if(confirmation.status){const confirmed=node("section","detail-group");confirmed.append(node("h3","",confirmation.status==="confirmed"?"最终采用条件":"等待用户确认"));kv(confirmed,"确认状态",confirmation.status==="confirmed"?"已确认":"待确认");kv(confirmed,"条件",confirmation.status==="confirmed"?finalConditionsText(confirmation):(confirmation.fields||[]).map(field=>`${field.label}：${confirmationStateLabels[field.state]||field.state}`).join("；"));root.append(confirmed);}
     const source=node("section","detail-group"); source.append(node("h3","","数据与执行")); kv(source,"数据来源",metadata.data_source || metadata.executor); kv(source,"执行路径",metadata.query_path || metadata.generator_mode); root.append(source);
     const details=node("details","sql-details"); details.append(node("summary","","生成的 SQL（默认折叠）")); details.append(node("pre","",valueOrMissing(payload.sql))); root.append(details);
     const safe=node("section","detail-group"); safe.append(node("h3","","安全与审计")); kv(safe,"权限状态",security.permission || metadata.permission_status); kv(safe,"脱敏状态",security.masking || metadata.masking_status); kv(safe,"审计状态",security.audit || metadata.audit_status); root.append(safe);
@@ -231,6 +270,22 @@
     turn.elapsedMs=Math.max(1,Math.round(performance.now()-started)); turn.pending=false; conversation.updatedAt=new Date().toISOString(); state.busy=false; persist(); $("#send").disabled=false; render();
   }
 
+  async function confirmTurn(index) {
+    const conversation=activeConversation(),turn=conversation?.turns?.[index],confirmation=turn?.payload?.confirmation;
+    if(!turn||!confirmation||state.busy)return;
+    const selections={...(turn.confirmationSelections||{})};
+    turn.confirmationEvents=[...(turn.confirmationEvents||[]),{createdAt:new Date().toISOString(),selections}];
+    turn.pending=true;state.busy=true;state.selectedTurn=index;persist();render();$("#send").disabled=true;
+    const started=performance.now();
+    try{
+      const response=await fetch("/api/v1/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:turn.question,user_id:USER_ID,conversation_id:conversation.id,confirmation:{token:confirmation.token,selections}})});
+      let payload;try{payload=await response.json();}catch(_){payload={error:{code:"INVALID_RESPONSE",message:"服务返回了无法识别的内容。",retryable:true},columns:[],rows:[]};}
+      if(!response.ok&&!payload.error)payload.error={code:`HTTP_${response.status}`,message:"查询服务暂时未完成请求。",retryable:response.status>=500};
+      turn.payload=payload;
+    }catch(_){turn.payload={question:turn.question,columns:[],rows:[],warnings:[],error:{code:"NETWORK_ERROR",message:"无法连接言出数行服务，请确认后端已经启动。",retryable:true},metadata:null,confirmation};}
+    turn.elapsedMs=Math.max(1,Math.round(performance.now()-started));turn.pending=false;conversation.updatedAt=new Date().toISOString();state.busy=false;persist();$("#send").disabled=false;render();
+  }
+
   function installFixture() {
     const params=new URLSearchParams(location.search); const fixture=params.get("fixture"); if(!fixture)return;
     const badge=node("div","fixture-banner",`截图验收模式 · ${fixture} · 数值为明确标注的界面 fixture，不是银行真实数据`); document.body.append(badge);
@@ -249,7 +304,8 @@
     $("#history-search").addEventListener("input",renderHistory);
     $("#history-list").addEventListener("click",event=>{const target=event.target.closest("[data-conversation-id]");if(!target)return;state.activeId=target.dataset.conversationId;const conversation=activeConversation();state.selectedTurn=conversation?.turns?.length?conversation.turns.length-1:null;state.page="chat";persist();render();});
     document.querySelector("nav").addEventListener("click",event=>{const target=event.target.closest("[data-page]");if(target)setPage(target.dataset.page);});
-    $("#message-scroll").addEventListener("click",event=>{const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);}});
+    $("#message-scroll").addEventListener("change",event=>{const select=event.target.closest("[data-confirm-field]");if(!select)return;const conversation=activeConversation(),turn=conversation?.turns?.[Number(select.dataset.turnIndex)];if(!turn)return;turn.confirmationSelections={...(turn.confirmationSelections||{})};if(select.value)turn.confirmationSelections[select.dataset.confirmField]=select.value;else delete turn.confirmationSelections[select.dataset.confirmField];persist();renderMessages();renderDetails();});
+    $("#message-scroll").addEventListener("click",event=>{const confirm=event.target.closest("[data-confirm-turn]");if(confirm){confirmTurn(Number(confirm.dataset.confirmTurn));return;}const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
     $("#composer").addEventListener("submit",event=>{event.preventDefault();const field=$("#question");const question=field.value;field.value="";submitQuestion(question);});
     $("#question").addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("#composer").requestSubmit();}});
   }
@@ -265,6 +321,14 @@
       const demoNames={single:"单值",ranking:"机构排名",trend:"趋势"};
       createConversation(`真实数据库联调：${demoNames[demoMode]||"机构排名"}`);
       await submitQuestion(state.suggestions[demoIndex]);
+    }
+    const intentDemo=params.get("intent_demo");
+    if(intentDemo&&!params.get("fixture")){
+      createConversation("真实意图确认：存款增长排名");
+      await submitQuestion("哪家银行存款增长最好？");
+      const conversation=activeConversation(),turn=conversation?.turns?.[0];
+      if(turn&&["selecting","confirmed"].includes(intentDemo)){turn.confirmationSelections={comparison_period:"full_range"};persist();render();}
+      if(turn&&intentDemo==="confirmed")await confirmTurn(0);
     }
   }
   initialize().catch(()=>{document.body.replaceChildren(node("div","error-card","候选前端资源加载失败，请重新启动服务。"));});
