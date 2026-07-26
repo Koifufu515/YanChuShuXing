@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "result_types": {
+    "单值": {"chart": "none", "label": "单值"},
+    "跨期比较": {"chart": "bar", "label": "跨期比较"},
+    "排名": {"chart": "bar", "label": "排名"},
+    "多机构对比": {"chart": "bar", "label": "多机构对比"},
+    "趋势": {"chart": "line", "label": "趋势"},
+    "衍生指标": {"chart": "none", "label": "衍生指标"},
+    "综合分析": {"chart": "bar", "label": "综合分析"}
+  },
+  "error_states": {
+    "CLARIFICATION_REQUIRED": ["条件不足", "请补充缺少的机构、指标、时间或比较条件。"],
+    "AMBIGUOUS_QUESTION": ["语义歧义", "问题存在多种理解，请确认分析条件。"],
+    "UNSUPPORTED_METRIC": ["暂不支持", "该指标尚未进入系统指标库。"],
+    "UNSUPPORTED_QUESTION": ["暂不支持", "当前版本暂不支持这类分析。"],
+    "ACCESS_DENIED": ["权限不足", "当前用户没有访问该数据的权限。"],
+    "SQL_REJECTED": ["安全拒绝", "该请求未通过安全检查。"],
+    "QUERY_TIMEOUT": ["查询超时", "查询耗时过长，请缩小范围后重试。"],
+    "LLM_TIMEOUT": ["模型超时", "问题理解服务暂时超时，请稍后重试。"],
+    "DATABASE_UNAVAILABLE": ["服务不可用", "数据服务暂时不可用，请稍后重试。"],
+    "LLM_UNAVAILABLE": ["服务不可用", "问题理解服务暂时不可用，请稍后重试。"]
+  }
+}

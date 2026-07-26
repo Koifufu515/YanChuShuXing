@@ -58,6 +58,9 @@ class QueryMetadata:
     provider: str | None = None
     model: str | None = None
     llm_latency_ms: float | None = None
+    query_duration_ms: float | None = None
+    result_type: str | None = None
+    chart_type: str | None = None
     semantic: SemanticMetadata | None = None
     fallback: FallbackMetadata = field(default_factory=FallbackMetadata)
 

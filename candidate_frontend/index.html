@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>言出数行 · 候选前端</title>
+  <link rel="stylesheet" href="/candidate/assets/styles.css">
+</head>
+<body>
+  <div id="candidate-banner" class="candidate-banner">候选版 · 验收通过前不替代现有 Streamlit 回退版</div>
+  <main class="workbench" data-testid="three-column-workbench" aria-label="三栏式 AI 数据分析工作台">
+    <aside class="left-rail" data-testid="left-rail">
+      <header class="brand"><span class="brand-mark">言</span><div><strong>言出数行</strong><small>银行智能问数</small></div></header>
+      <button id="new-chat" class="primary wide" type="button"><span>＋</span> 新建会话</button>
+      <nav aria-label="主要功能">
+        <button class="nav-item active" type="button" data-page="chat"><span>◫</span>聊天分析</button>
+        <button class="nav-item" type="button" data-page="dashboard"><span>▦</span>数据看板</button>
+      </nav>
+      <section class="history-head"><strong>历史会话</strong><span id="history-count">0</span></section>
+      <label class="search"><span>⌕</span><input id="history-search" type="search" placeholder="检索历史会话" autocomplete="off" aria-label="检索历史会话"></label>
+      <div id="history-list" class="history-list" aria-live="polite"></div>
+      <footer class="user-card"><span class="avatar">U</span><div><strong>比赛演示用户</strong><small>经营分析 · 只读权限</small></div></footer>
+    </aside>
+
+    <section class="center-panel" data-testid="chat-panel">
+      <header class="panel-head"><div><h1 id="page-title">新会话</h1><p id="page-subtitle">用自然语言查询银行经营数据</p></div><button id="head-new-chat" class="ghost" type="button">＋ 新建会话</button></header>
+      <div id="chat-view" class="chat-view">
+        <div id="message-scroll" class="message-scroll" data-testid="message-scroll"></div>
+        <form id="composer" class="composer" data-testid="fixed-composer">
+          <textarea id="question" rows="1" maxlength="500" placeholder="输入银行经营分析问题，按 Enter 发送……" aria-label="输入问题"></textarea>
+          <button id="send" class="send" type="submit" aria-label="发送问题">↑</button>
+          <p>回答来自真实查询；按 Shift + Enter 换行</p>
+        </form>
+      </div>
+      <div id="dashboard-view" class="dashboard-view" hidden></div>
+    </section>
+
+    <aside class="detail-panel" data-testid="detail-panel">
+      <header class="detail-head"><div><h2>执行详情</h2><p>当前选中的 AI 回答</p></div><span id="detail-status" class="status-chip">未查询</span></header>
+      <div id="detail-content" class="detail-content"></div>
+    </aside>
+  </main>
+  <script src="/candidate/assets/app.js" defer></script>
+</body>
+</html>

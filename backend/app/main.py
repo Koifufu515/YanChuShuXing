@@ -1,7 +1,11 @@
+from pathlib import Path
+
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.error_handlers import register_error_handlers
+from app.api.examples import router as examples_router
 from app.api.query import router as query_router
 from app.bootstrap.container import configure_dependencies
 from app.application.errors import ApplicationError
@@ -15,8 +19,24 @@ app = FastAPI(
     description="面向银行经营分析场景的智能问数与协同分析 API",
 )
 app.include_router(query_router)
+app.include_router(examples_router)
 register_error_handlers(app)
 configure_dependencies(app)
+
+
+_CANDIDATE_FRONTEND = Path(__file__).resolve().parents[2] / "candidate_frontend"
+
+
+@app.get("/candidate", include_in_schema=False)
+def candidate_frontend() -> FileResponse:
+    return FileResponse(_CANDIDATE_FRONTEND / "index.html")
+
+
+app.mount(
+    "/candidate/assets",
+    StaticFiles(directory=_CANDIDATE_FRONTEND),
+    name="candidate-frontend-assets",
+)
 
 
 @app.get("/health")

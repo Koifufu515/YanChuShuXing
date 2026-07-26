@@ -48,6 +48,31 @@ class RealContextResolverTest(unittest.TestCase):
         with self.assertRaises(RuleNotMatchedError):
             RealRuleSQLGenerator().generate("查询有效客户数量", context)
 
+    def test_real_rule_executes_single_ranking_and_trend_queries(self):
+        from app.bootstrap.container import build_pipeline
+
+        pipeline = build_pipeline(
+            self.database,
+            settings=Settings(data_environment="real", generator_mode="rule"),
+        )
+        cases = [
+            ("查询机构一在2025-01-31的指标一", "单值", "none", 1),
+            ("查询2025-01-31指标一机构排名", "排名", "bar", 1),
+            ("查询机构一从2025-01-31到2025-01-31的指标一趋势", "趋势", "line", 1),
+        ]
+        for index, (question, result_type, chart_type, row_count) in enumerate(cases):
+            with self.subTest(result_type=result_type):
+                outcome = pipeline.run(
+                    QueryCommand(question, "test", "conversation", f"real_{index}")
+                )
+                self.assertIsNone(outcome.error)
+                self.assertEqual(len(outcome.rows), row_count)
+                self.assertEqual(outcome.metadata.result_type, result_type)
+                self.assertEqual(outcome.metadata.chart_type, chart_type)
+                self.assertIsNotNone(outcome.metadata.query_duration_ms)
+                self.assertNotIn("机构一", outcome.sql)
+                self.assertNotIn("2025-01-31", outcome.sql)
+
     def test_real_pipeline_executes_basic_metric_query_with_fake_llm(self):
         from app.bootstrap.container import build_pipeline
 

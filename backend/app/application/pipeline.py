@@ -86,7 +86,14 @@ class QueryPipeline:
                 rows=result.rows,
                 summary=formatted.summary,
                 warnings=[*warnings, *formatted.warnings],
-                metadata=generated.metadata,
+                metadata=(
+                    replace(
+                        generated.metadata,
+                        query_duration_ms=round(result.duration_ms, 3),
+                    )
+                    if generated.metadata
+                    else None
+                ),
             )
         except ApplicationError as exc:
             error = ErrorDetail(
