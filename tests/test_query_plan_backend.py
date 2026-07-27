@@ -1252,7 +1252,7 @@ class BatchFailureRegressionTest(unittest.TestCase):
 
         self.assertTrue(result.rows)
 
-    def test_pending_business_concept_blocks_partial_execution(self):
+    def test_frozen_business_concept_rejects_partial_execution(self):
         project_root = Path(__file__).resolve().parents[1]
         context = json.loads(
             (
@@ -1296,10 +1296,19 @@ class BatchFailureRegressionTest(unittest.TestCase):
 
         self.assertTrue(
             any(
-                error["path"] == "status.code"
-                and "pending_project_definition" in error["message"]
+                error["path"] == "metrics.requested_metric_ids"
+                and "ZB012" in error["message"]
                 for error in errors
-            )
+            ),
+            errors,
+        )
+        self.assertTrue(
+            any(
+                error["path"] == "metrics.concept_ids"
+                and "BC006" in error["message"]
+                for error in errors
+            ),
+            errors,
         )
 
 

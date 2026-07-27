@@ -232,13 +232,31 @@ def validate_business_rules(
             }
         )
 
-    pending_concept_names = [
-        str(item.get("name"))
+    business_concept_items = [
+        item
         for item in context.get("business_concepts", [])
         if isinstance(item, dict)
-        and item.get("status") == "待项目确认"
+    ]
+    pending_concept_names = [
+        str(item.get("name"))
+        for item in business_concept_items
+        if item.get("status") == "待项目确认"
         and isinstance(item.get("name"), str)
     ]
+    frozen_concept_ids_by_name = {
+        str(item.get("name")): str(item.get("concept_id"))
+        for item in business_concept_items
+        if item.get("status") == "已有项目口径"
+        and isinstance(item.get("name"), str)
+        and isinstance(item.get("concept_id"), str)
+    }
+    metric_ids_by_name = {
+        str(item.get("name")): str(item.get("metric_id"))
+        for item in context.get("metrics", [])
+        if isinstance(item, dict)
+        and isinstance(item.get("name"), str)
+        and isinstance(item.get("metric_id"), str)
+    }
     explicit_metric_names = [
         str(item.get("name"))
         for item in context.get("metrics", [])
@@ -252,6 +270,16 @@ def validate_business_rules(
         "网点平均存款规模": "ZB030",
         "日均存款余额": "ZB031",
     }
+    explicit_metric_ids = {
+        metric_ids_by_name[name]
+        for name in explicit_metric_names
+        if name in metric_ids_by_name
+    }
+    explicit_metric_ids.update(
+        metric_id
+        for alias, metric_id in explicit_metric_aliases.items()
+        if alias in question
+    )
     concept_search_text = question
     protected_metric_phrases = [
         *explicit_metric_names,
@@ -270,6 +298,11 @@ def validate_business_rules(
     matched_pending_concepts = [
         name for name in pending_concept_names if name in concept_search_text
     ]
+    matched_frozen_concept_ids = {
+        concept_id
+        for name, concept_id in frozen_concept_ids_by_name.items()
+        if name in concept_search_text
+    }
     if (
         matched_pending_concepts
         and status_code != "pending_project_definition"
@@ -287,15 +320,16 @@ def validate_business_rules(
         )
     if (
         status_code == "pending_project_definition"
-        and pending_concept_names
+        and business_concept_items
         and not matched_pending_concepts
     ):
         errors.append(
             {
                 "path": "status.code",
                 "message": (
-                    "问题中没有作为宽泛维度使用的待确认业务概念；"
-                    "正式指标全名或明确别名应生成executable计划。"
+                    "问题未命中任何状态为“待项目确认”的业务概念；"
+                    "正式指标全名或明确别名应生成executable计划，"
+                    "不得使用pending_project_definition。"
                 ),
             }
         )
@@ -375,11 +409,15 @@ def validate_business_rules(
                     )
 
     metrics_plan = plan.get("metrics")
+    requested_metric_ids: list[object] = []
     source_metric_ids: list[object] = []
+    planned_concept_ids: list[object] = []
     if isinstance(metrics_plan, dict):
         for field in ("requested_metric_ids", "source_metric_ids"):
             values = metrics_plan.get(field)
             if isinstance(values, list):
+                if field == "requested_metric_ids":
+                    requested_metric_ids = values
                 if field == "source_metric_ids":
                     source_metric_ids = values
                 for index, metric_id in enumerate(values):
@@ -392,6 +430,7 @@ def validate_business_rules(
                         )
         concept_ids = metrics_plan.get("concept_ids")
         if isinstance(concept_ids, list):
+            planned_concept_ids = concept_ids
             for index, concept_id in enumerate(concept_ids):
                 if concept_id not in official_concept_ids:
                     errors.append(
@@ -400,6 +439,106 @@ def validate_business_rules(
                             "message": "业务概念编号不在正式语义上下文中。",
                         }
                     )
+
+    if status_code == "executable":
+        requested_metric_id_set = {
+            value
+            for value in requested_metric_ids
+            if isinstance(value, str)
+        }
+        source_metric_id_set = {
+            value
+            for value in source_metric_ids
+            if isinstance(value, str)
+        }
+        planned_concept_id_set = {
+            value
+            for value in planned_concept_ids
+            if isinstance(value, str)
+        }
+
+        missing_explicit_metric_ids = sorted(
+            explicit_metric_ids - requested_metric_id_set
+        )
+        if missing_explicit_metric_ids:
+            errors.append(
+                {
+                    "path": "metrics.requested_metric_ids",
+                    "message": (
+                        "题目明确要求的正式指标未完整列入"
+                        "requested_metric_ids，缺少："
+                        + "、".join(missing_explicit_metric_ids)
+                    ),
+                }
+            )
+
+        missing_concept_ids = sorted(
+            matched_frozen_concept_ids - planned_concept_id_set
+        )
+        if missing_concept_ids:
+            errors.append(
+                {
+                    "path": "metrics.concept_ids",
+                    "message": (
+                        "题目命中的已冻结业务概念未完整列入"
+                        "concept_ids，缺少："
+                        + "、".join(missing_concept_ids)
+                    ),
+                }
+            )
+
+        required_requested_metric_ids: set[str] = set()
+        required_source_metric_ids: set[str] = set()
+        for concept in business_concept_items:
+            concept_id = concept.get("concept_id")
+            if concept_id not in matched_frozen_concept_ids:
+                continue
+            required_requested_metric_ids.update(
+                value
+                for value in concept.get(
+                    "requested_metric_ids",
+                    [],
+                )
+                if isinstance(value, str)
+            )
+            required_source_metric_ids.update(
+                value
+                for value in concept.get(
+                    "source_metric_ids",
+                    [],
+                )
+                if isinstance(value, str)
+            )
+
+        missing_requested_metric_ids = sorted(
+            required_requested_metric_ids - requested_metric_id_set
+        )
+        if missing_requested_metric_ids:
+            errors.append(
+                {
+                    "path": "metrics.requested_metric_ids",
+                    "message": (
+                        "已冻结业务概念未按固定口径完整展开，"
+                        "requested_metric_ids缺少："
+                        + "、".join(missing_requested_metric_ids)
+                    ),
+                }
+            )
+
+        missing_source_metric_ids = sorted(
+            required_source_metric_ids - source_metric_id_set
+        )
+        if missing_source_metric_ids:
+            errors.append(
+                {
+                    "path": "metrics.source_metric_ids",
+                    "message": (
+                        "已冻结业务概念所需基础指标未完整列入"
+                        "source_metric_ids，缺少："
+                        + "、".join(missing_source_metric_ids)
+                    ),
+                }
+            )
 
     if len(source_metric_ids) >= 2 and not has_check(plan, "metric_completeness"):
         errors.append(

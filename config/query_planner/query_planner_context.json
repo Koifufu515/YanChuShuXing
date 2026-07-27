@@ -381,6 +381,8 @@
       "concept_id": "BC001",
       "name": "主要经营指标",
       "related_metric_ids": [
+        "ZB001",
+        "ZB002",
         "ZB022",
         "ZB013",
         "ZB015",
@@ -389,68 +391,129 @@
         "ZB011",
         "ZB012"
       ],
-      "status": "待项目确认"
+      "classification_metric_ids": [
+        "ZB001",
+        "ZB002",
+        "ZB013",
+        "ZB015",
+        "ZB016",
+        "ZB017",
+        "ZB011",
+        "ZB012"
+      ],
+      "status": "已有项目口径",
+      "definition": "固定经营看板共9项：各项存款余额、各项贷款余额、存贷比、不良贷款率、拨备覆盖率、资本充足率、逾期贷款率、净利润、成本收入比。全部返回数值与排名；存贷比仅作数值排名，不参与表现较好或表现较差分类。",
+      "requested_metric_ids": [
+        "ZB001",
+        "ZB002",
+        "ZB022",
+        "ZB013",
+        "ZB015",
+        "ZB016",
+        "ZB017",
+        "ZB011",
+        "ZB012"
+      ],
+      "source_metric_ids": [
+        "ZB001",
+        "ZB002",
+        "ZB013",
+        "ZB015",
+        "ZB016",
+        "ZB017",
+        "ZB011",
+        "ZB012"
+      ]
     },
     {
       "concept_id": "BC002",
       "name": "表现较好",
       "related_metric_ids": [],
-      "status": "已有官方口径",
-      "definition": "某项指标绩效排名进入全省前3名。"
+      "status": "已有项目口径",
+      "definition": "在BC001.classification_metric_ids范围内，某项指标绩效排名进入全省前3名；第3名存在并列时全部保留。",
+      "requested_metric_ids": [],
+      "source_metric_ids": []
     },
     {
       "concept_id": "BC003",
       "name": "表现较差",
       "related_metric_ids": [],
-      "status": "已有官方口径",
-      "definition": "某项指标绩效排名进入全省后4名。"
+      "status": "已有项目口径",
+      "definition": "在BC001.classification_metric_ids范围内，某项指标绩效排名进入全省后4名，即13家机构中的第10至第13名；第10名存在并列时全部保留。",
+      "requested_metric_ids": [],
+      "source_metric_ids": []
     },
     {
       "concept_id": "BC004",
       "name": "规模",
       "related_metric_ids": [
         "ZB001",
-        "ZB002"
+        "ZB002",
+        "ZB022"
       ],
-      "status": "待项目确认"
+      "status": "已有项目口径",
+      "definition": "综合经营分析中的规模维度固定包含各项存款余额、各项贷款余额和存贷比。",
+      "requested_metric_ids": [
+        "ZB001",
+        "ZB002",
+        "ZB022"
+      ],
+      "source_metric_ids": [
+        "ZB001",
+        "ZB002"
+      ]
     },
     {
       "concept_id": "BC005",
       "name": "资产质量",
       "related_metric_ids": [
-        "ZB013",
-        "ZB014",
-        "ZB015",
-        "ZB017"
+        "ZB013"
       ],
-      "status": "待项目确认"
+      "status": "已有项目口径",
+      "definition": "综合经营分析中的资产质量维度默认使用不良贷款率；题目明确指定不良贷款余额、拨备覆盖率或逾期贷款率时，按显式指标扩展。",
+      "requested_metric_ids": [
+        "ZB013"
+      ],
+      "source_metric_ids": [
+        "ZB013"
+      ]
     },
     {
       "concept_id": "BC006",
       "name": "盈利能力",
       "related_metric_ids": [
-        "ZB007",
-        "ZB008",
-        "ZB009",
-        "ZB010",
-        "ZB011",
-        "ZB012",
-        "ZB023",
-        "ZB034",
-        "ZB035"
+        "ZB011"
       ],
-      "status": "待项目确认"
+      "status": "已有项目口径",
+      "definition": "综合经营分析中的盈利能力维度默认使用净利润。题目明确要求成本收入比、收入结构或其他正式指标时，显式要求优先于默认指标并据此扩展。",
+      "requested_metric_ids": [
+        "ZB011"
+      ],
+      "source_metric_ids": [
+        "ZB011"
+      ]
     },
     {
       "concept_id": "BC007",
       "name": "收入结构",
       "related_metric_ids": [
-        "ZB007",
         "ZB008",
+        "ZB007",
         "ZB009",
         "ZB034"
       ],
-      "status": "待项目确认"
+      "status": "已有项目口径",
+      "definition": "固定返回净利息收入ZB008、中间业务收入ZB007、净利息收入占营业收入比重ZB034，以及中间业务收入占营业收入比重（ZB007÷ZB009×100%）。",
+      "requested_metric_ids": [
+        "ZB008",
+        "ZB007",
+        "ZB034"
+      ],
+      "source_metric_ids": [
+        "ZB008",
+        "ZB007",
+        "ZB009"
+      ]
     }
   ],
   "language_rules": [
@@ -572,7 +635,7 @@
     {
       "rule_id": "LR024",
       "expression": "主要经营指标／规模／资产质量／盈利能力／收入结构",
-      "interpretation": "只有在这些词被单独作为宽泛分析维度、需要自动展开一组指标时才查询业务概念字典并按待确认状态处理；正式指标全名及明确别名（如存款规模、贷款规模、网点平均存款规模）优先映射指标，不得因包含“规模”子串而误判。"
+      "interpretation": "这些业务概念均已有项目口径，作为宽泛分析维度时按business_concepts中的固定定义自动展开并生成executable计划。显式指标要求优先于概念默认指标。BC001返回9项主要经营指标，其中ZB022仅作数值排名；BC002和BC003只在BC001.classification_metric_ids范围内分类。正式指标全名及明确别名（如存款规模、贷款规模、网点平均存款规模）仍优先映射指标，不得因包含“规模”子串而误判。"
     },
     {
       "rule_id": "LR025",
