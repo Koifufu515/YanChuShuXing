@@ -6,14 +6,14 @@ from fastapi import APIRouter, Depends, Response
 
 from app.api.schemas import QueryRequestDTO, QueryResponseDTO
 from app.application.models import QueryCommand
-from app.application.pipeline import QueryPipeline
+from app.ports.query_service import QueryService
 
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
 
 
-def get_query_pipeline() -> QueryPipeline:
-    raise RuntimeError("QueryPipeline dependency has not been configured.")
+def get_query_pipeline() -> QueryService:
+    raise RuntimeError("Query service dependency has not been configured.")
 
 
 @router.post("/query", response_model=QueryResponseDTO)
@@ -21,7 +21,7 @@ def get_query_pipeline() -> QueryPipeline:
 def query(
     request: QueryRequestDTO,
     response: Response,
-    pipeline: QueryPipeline = Depends(get_query_pipeline),
+    pipeline: QueryService = Depends(get_query_pipeline),
 ) -> QueryResponseDTO:
     outcome = pipeline.run(
         QueryCommand(
@@ -45,6 +45,8 @@ def _status_for(error_code: str | None) -> int:
         "CLARIFICATION_REQUIRED": 400,
         "INVALID_CONFIRMATION": 400,
         "UNSUPPORTED_METRIC": 400,
+        "PENDING_PROJECT_DEFINITION": 422,
+        "DATA_UNAVAILABLE": 422,
         "SQL_REJECTED": 403,
         "ACCESS_DENIED": 403,
         "LLM_PROVIDER_ERROR": 502,

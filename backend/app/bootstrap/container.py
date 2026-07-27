@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from app.adapters.audit.noop_logger import NoOpAuditLogger
-from app.adapters.context.real_database_resolver import RealDatabaseContextResolver
 from app.adapters.context.yaml_resolver import YAMLContextResolver
 from app.adapters.database.sqlite_executor import SQLiteExecutor
-from app.adapters.formatting.real_result_formatter import RealResultFormatter
+from app.adapters.execution.deterministic_query_plan_executor import (
+    DeterministicQueryPlanExecutor,
+)
 from app.adapters.formatting.template_formatter import TemplateResultFormatter
 from app.adapters.generation.hybrid_generator import HybridSQLGenerator
 from app.adapters.generation.llm_generator import LLMSQLGenerator
@@ -16,11 +18,17 @@ from app.adapters.generation.real_rule_generator import RealRuleSQLGenerator
 from app.adapters.generation.rule_generator import RuleSQLGenerator
 from app.adapters.intent_confirmation import RealIntentConfirmationResolver
 from app.adapters.llm.deepseek_provider import DeepSeekLLMProvider
+from app.adapters.planning.llm_query_planner import LLMQueryPlanner
 from app.adapters.safety.sqlglot_checker import SQLGlotSafetyChecker
+from app.application.errors import ConfigurationError
 from app.application.pipeline import QueryPipeline
+from app.application.planned_pipeline import PlannedQueryPipeline
 from app.core.data_source import resolve_database_path
 from app.core.settings import Settings
 from app.ports.llm_provider import LLMProvider
+from app.ports.query_plan_executor import QueryPlanExecutor
+from app.ports.query_planner import QueryPlanner
+from app.ports.query_service import QueryService
 from app.ports.sql_generator import SQLGenerator
 
 
@@ -31,7 +39,9 @@ def build_pipeline(
     database_path: Path | None = None,
     settings: Settings | None = None,
     llm_provider: LLMProvider | None = None,
-) -> QueryPipeline:
+    query_planner: QueryPlanner | None = None,
+    query_plan_executor: QueryPlanExecutor | None = None,
+) -> QueryService:
     resolved_settings = settings or Settings.from_env(PROJECT_ROOT / ".env")
     resolved_database = (
         Path(database_path).resolve()
@@ -43,31 +53,73 @@ def build_pipeline(
         )
     )
     is_real = resolved_settings.data_environment == "real"
+    database_executor = SQLiteExecutor(resolved_database)
+
+    if is_real:
+        provider = llm_provider or DeepSeekLLMProvider(
+            base_url=resolved_settings.llm_base_url,
+            api_key=resolved_settings.llm_api_key,
+            model=resolved_settings.llm_model,
+        )
+        planner = query_planner or _build_query_planner(
+            provider,
+            resolved_settings,
+        )
+        executor = query_plan_executor or DeterministicQueryPlanExecutor(
+            database_executor
+        )
+        return PlannedQueryPipeline(
+            query_planner=planner,
+            query_plan_executor=executor,
+            audit_logger=NoOpAuditLogger(),
+            provider_name=resolved_settings.llm_provider,
+        )
+
     return QueryPipeline(
-        context_resolver=(
-            RealDatabaseContextResolver(resolved_database)
-            if is_real
-            else YAMLContextResolver(
-                PROJECT_ROOT / "config" / "schema.yml",
-                PROJECT_ROOT / "config" / "metrics.yml",
-            )
+        context_resolver=YAMLContextResolver(
+            PROJECT_ROOT / "config" / "schema.yml",
+            PROJECT_ROOT / "config" / "metrics.yml",
         ),
         sql_generator=_build_sql_generator(
             resolved_settings,
             llm_provider,
-            prompt_profile="real" if is_real else "demo",
+            prompt_profile="demo",
         ),
         safety_checker=SQLGlotSafetyChecker(),
-        database_executor=SQLiteExecutor(resolved_database),
-        result_formatter=(
-            RealResultFormatter() if is_real else TemplateResultFormatter()
-        ),
+        database_executor=database_executor,
+        result_formatter=TemplateResultFormatter(),
         audit_logger=NoOpAuditLogger(),
         intent_confirmation_resolver=(
             RealIntentConfirmationResolver(resolved_database)
             if is_real and resolved_settings.generator_mode == "rule"
             else None
         ),
+    )
+
+
+def _build_query_planner(
+    provider: LLMProvider,
+    settings: Settings,
+) -> QueryPlanner:
+    config_dir = PROJECT_ROOT / "config" / "query_planner"
+    prompt_path = config_dir / "query_planner_prompt.md"
+    schema_path = config_dir / "query_plan.schema.json"
+    context_path = config_dir / "query_planner_context.json"
+    try:
+        prompt = prompt_path.read_text(encoding="utf-8")
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        context = json.loads(context_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigurationError("查询规划器配置文件无法读取。") from exc
+    if not isinstance(schema, dict) or not isinstance(context, dict):
+        raise ConfigurationError("查询规划器配置文件顶层必须是JSON对象。")
+    return LLMQueryPlanner(
+        provider=provider,
+        prompt=prompt,
+        schema=schema,
+        context=context,
+        timeout_seconds=settings.llm_timeout_seconds,
+        temperature=settings.llm_temperature,
     )
 
 
@@ -108,7 +160,7 @@ def _build_sql_generator(
 
 
 @lru_cache(maxsize=1)
-def get_pipeline() -> QueryPipeline:
+def get_pipeline() -> QueryService:
     return build_pipeline()
 
 

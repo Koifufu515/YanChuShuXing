@@ -1,23 +1,45 @@
 import tempfile
 import unittest
-import json
 from pathlib import Path
 
 from app.adapters.context.real_database_resolver import RealDatabaseContextResolver
 from app.adapters.generation.real_rule_generator import RealRuleSQLGenerator
 from app.application.errors import RuleNotMatchedError
+from app.application.models import (
+    QueryCommand,
+    QueryPlanResult,
+    QueryPlanValidation,
+)
+from app.core.settings import Settings
 from scripts.data.import_official_workbook import import_workbook
 from test_real_import_contract import _workbook
-from app.application.models import LLMResponse, QueryCommand
-from app.core.settings import Settings
 
 
-class FakeProvider:
-    def __init__(self, responses):
-        self.responses = list(responses)
+class StaticQueryPlanner:
+    def __init__(self, query_plan):
+        self.query_plan = query_plan
 
-    def complete(self, request):
-        return LLMResponse(self.responses.pop(0), "fake-real-model", 1)
+    def plan(self, question: str) -> QueryPlanResult:
+        validation = QueryPlanValidation(
+            schema_valid=True,
+            schema_errors=[],
+            business_valid=True,
+            business_errors=[],
+            query_plan=self.query_plan,
+        )
+        return QueryPlanResult(
+            success=True,
+            question=question,
+            model="fake-query-planner",
+            latency_ms=1.0,
+            repair_attempted=False,
+            initial_validation=validation,
+            schema_valid=True,
+            schema_errors=[],
+            business_valid=True,
+            business_errors=[],
+            query_plan=self.query_plan,
+        )
 
 
 class RealContextResolverTest(unittest.TestCase):
@@ -48,64 +70,77 @@ class RealContextResolverTest(unittest.TestCase):
         with self.assertRaises(RuleNotMatchedError):
             RealRuleSQLGenerator().generate("查询有效客户数量", context)
 
-    def test_real_rule_executes_single_ranking_and_trend_queries(self):
+    def test_real_pipeline_executes_basic_metric_query_with_fake_planner(self):
         from app.bootstrap.container import build_pipeline
 
-        pipeline = build_pipeline(
-            self.database,
-            settings=Settings(data_environment="real", generator_mode="rule"),
-        )
-        cases = [
-            ("查询机构一在2025-01-31的指标一", "单值", "none", 1),
-            ("查询2025-01-31指标一机构排名", "排名", "bar", 1),
-            ("查询机构一从2025-01-31到2025-01-31的指标一趋势", "趋势", "line", 1),
-        ]
-        for index, (question, result_type, chart_type, row_count) in enumerate(cases):
-            with self.subTest(result_type=result_type):
-                outcome = pipeline.run(
-                    QueryCommand(question, "test", "conversation", f"real_{index}")
-                )
-                self.assertIsNone(outcome.error)
-                self.assertEqual(len(outcome.rows), row_count)
-                self.assertEqual(outcome.metadata.result_type, result_type)
-                self.assertEqual(outcome.metadata.chart_type, chart_type)
-                self.assertIsNotNone(outcome.metadata.query_duration_ms)
-                self.assertNotIn("机构一", outcome.sql)
-                self.assertNotIn("2025-01-31", outcome.sql)
-
-    def test_real_pipeline_executes_basic_metric_query_with_fake_llm(self):
-        from app.bootstrap.container import build_pipeline
-
-        semantic = {
-            "intent": "metric_single_value",
-            "business_domain": "operation",
-            "metrics": ["M1"],
-            "dimensions": ["institution"],
-            "filters": {"institution_id": "I1", "data_date": "2025-01-31"},
-            "time_range": None,
-            "sort": [],
-            "limit": None,
-            "clarification_required": False,
-            "clarification_question": None,
-            "confidence": 0.99,
-        }
-        sql = {
-            "sql": "SELECT i.institution_id, i.institution_name, m.metric_id, m.metric_name, f.data_date, scaled_value(f.metric_value_scaled, m.value_scale) AS metric_value, m.metric_unit FROM metric_facts f JOIN institutions i USING(institution_id) JOIN metrics m USING(metric_id) WHERE f.institution_id=:institution_id AND f.metric_id=:metric_id AND f.data_date=:data_date",
-            "parameters": {
-                "institution_id": "I1",
-                "metric_id": "M1",
-                "data_date": "2025-01-31",
+        query_plan = {
+            "status": {
+                "code": "executable",
+                "reason": "测试固定查询计划。",
+                "clarification_question": None,
             },
-            "warnings": [],
+            "institutions": {
+                "target_institution_ids": ["I1"],
+                "comparison_population": {
+                    "type": "selected_institutions",
+                    "institution_ids": ["I1"],
+                },
+            },
+            "metrics": {
+                "requested_metric_ids": ["M1"],
+                "source_metric_ids": ["M1"],
+            },
+            "time": {
+                "mode": "point",
+                "grain": "day",
+                "dates": ["2025-01-31"],
+                "start_date": None,
+                "end_date": None,
+                "comparison_periods": [],
+            },
+            "operations": [
+                {
+                    "step": 1,
+                    "operator_id": "OP001",
+                    "input_refs": ["M1"],
+                    "output_ref": "metric_value",
+                    "parameters": {
+                        "institution_id": "I1",
+                        "date": "2025-01-31",
+                    },
+                }
+            ],
+            "checks": [],
+            "output": {
+                "format": "table",
+                "result_fields": [],
+                "rounding": {
+                    "mode": "half_up",
+                    "digits": 2,
+                },
+                "tie_policy": None,
+            },
         }
+
         pipeline = build_pipeline(
             self.database,
             settings=Settings(data_environment="real", generator_mode="llm"),
-            llm_provider=FakeProvider(
-                [json.dumps(semantic, ensure_ascii=False), json.dumps(sql)]
-            ),
+            query_planner=StaticQueryPlanner(query_plan),
         )
-        outcome = pipeline.run(QueryCommand("查询机构一指标一", "test", None, "r1"))
+
+        outcome = pipeline.run(
+            QueryCommand("查询机构一指标一", "test", None, "r1")
+        )
+
         self.assertIsNone(outcome.error)
         self.assertEqual(outcome.rows[0][-2], 12.34)
         self.assertIn("机构一", outcome.summary)
+        self.assertEqual(outcome.metadata.route, "QueryPlan")
+        self.assertEqual(
+            [item["operator_id"] for item in outcome.metadata.execution_trace],
+            ["OP001"],
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
