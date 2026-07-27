@@ -114,6 +114,9 @@ class CandidateFrontendContractTest(unittest.TestCase):
     def test_confirmation_card_and_persistence_use_the_same_conversation(self) -> None:
         for marker in (
             "confirmation-card",
+            "confirmation-intro",
+            "confirmation-options",
+            "confirmation-option",
             "confirmationSelections",
             "confirmationEvents",
             "确认并查询",
@@ -125,6 +128,7 @@ class CandidateFrontendContractTest(unittest.TestCase):
         self.assertIn("localStorage.setItem(STORAGE_KEY", self.javascript)
         self.assertIn("localStorage.getItem(STORAGE_KEY", self.javascript)
         self.assertIn('payload.error?.code==="CLARIFICATION_REQUIRED"', self.javascript)
+        self.assertIn('event.target.closest("[data-confirm-field],.confirmation-option")', self.javascript)
         self.assertIn("state-needs_confirmation", self.css)
         self.assertIn("state-unrecognized", self.css)
 

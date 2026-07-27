@@ -169,30 +169,32 @@
   function renderConfirmation(turn,index,payload) {
     const confirmation=payload.confirmation||{};
     const box=node("section","confirmation-card");
-    box.append(node("p","confirmation-original",`原问题：${confirmation.original_question||turn.question}`));
+    const visibleFields=(confirmation.fields||[]).filter(field=>!field.visible_when||turn.confirmationSelections?.[field.visible_when.field]===field.visible_when.equals);
+    const unresolved=visibleFields.filter(field=>!field.value&&(field.required!==false||field.input_type==="date"));
+    const intro=node("div","confirmation-intro");
+    intro.append(node("strong","","请确认查询条件"),node("span","confirmation-count",unresolved.length?`还需确认 ${unresolved.length} 项`:"条件已完整"));
+    box.append(intro);
+    const original=node("p","confirmation-original");original.append(node("span","","原问题"),document.createTextNode(confirmation.original_question||turn.question));box.append(original);
     box.append(node("p","confirmation-summary",confirmation.summary||"请确认分析条件。"));
     const fields=node("div","confirmation-fields");
-    (confirmation.fields||[]).forEach(field=>{
-      const condition=field.visible_when;
-      if(condition&&turn.confirmationSelections?.[condition.field]!==condition.equals)return;
-      const row=node("label","confirmation-field");
+    visibleFields.forEach(field=>{
+      const row=node("div",`confirmation-field field-${field.state}`);
       const head=node("span","confirmation-label"); head.append(node("strong","",field.label),node("em",`state-${field.state}`,confirmationStateLabels[field.state]||"暂未提供")); row.append(head);
       if(field.value){ row.append(node("span","confirmed-value",field.value.label||field.value.id)); }
       else if(field.input_type==="date"){
         const input=node("input","confirmation-select");input.type="date";input.dataset.confirmField=field.key;input.dataset.turnIndex=String(index);input.value=turn.confirmationSelections?.[field.key]||"";row.append(input);
       } else {
-        const select=node("select","confirmation-select"); select.dataset.confirmField=field.key; select.dataset.turnIndex=String(index); select.disabled=!(field.options||[]).length;
-        const placeholder=node("option","",(field.options||[]).length?`请选择${field.label}`:"暂无可用候选"); placeholder.value=""; select.append(placeholder);
-        (field.options||[]).forEach(option=>{const item=node("option","",option.label);item.value=option.id;if(turn.confirmationSelections?.[field.key]===option.id)item.selected=true;select.append(item);});
-        row.append(select);
-        if((field.options||[]).length)row.append(node("small","candidate-list",`可选：${field.options.map(option=>option.label).join("、")}`));
+        const options=node("div","confirmation-options");
+        (field.options||[]).forEach(option=>{const item=node("label","confirmation-option");const input=document.createElement("input");input.type="radio";input.name=`confirmation-${index}-${field.key}`;input.value=option.id;input.dataset.confirmField=field.key;input.dataset.turnIndex=String(index);input.checked=turn.confirmationSelections?.[field.key]===option.id;item.append(input,node("span","",option.label));options.append(item);});
+        if(!(field.options||[]).length)options.append(node("span","confirmation-empty","暂无可用候选"));
+        row.append(options);
       }
       fields.append(row);
     });
     box.append(fields);
     const actions=node("div","confirmation-actions");
     const confirm=node("button","primary confirmation-submit","确认并查询");confirm.type="button";confirm.dataset.confirmTurn=String(index);
-    const required=(confirmation.fields||[]).filter(field=>{const visible=!field.visible_when||turn.confirmationSelections?.[field.visible_when.field]===field.visible_when.equals;return visible&&!field.value&&(field.required!==false||field.input_type==="date");});
+    const required=visibleFields.filter(field=>!field.value&&(field.required!==false||field.input_type==="date"));
     confirm.disabled=required.some(field=>!turn.confirmationSelections?.[field.key]);
     const edit=node("button","ghost confirmation-edit","修改问题");edit.type="button";edit.dataset.editTurn=String(index);
     actions.append(confirm,edit);box.append(actions);
@@ -310,7 +312,7 @@
     $("#history-list").addEventListener("click",event=>{const target=event.target.closest("[data-conversation-id]");if(!target)return;state.activeId=target.dataset.conversationId;const conversation=activeConversation();state.selectedTurn=conversation?.turns?.length?conversation.turns.length-1:null;state.page="chat";persist();render();});
     document.querySelector("nav").addEventListener("click",event=>{const target=event.target.closest("[data-page]");if(target)setPage(target.dataset.page);});
     $("#message-scroll").addEventListener("change",event=>{const select=event.target.closest("[data-confirm-field]");if(!select)return;const conversation=activeConversation(),turn=conversation?.turns?.[Number(select.dataset.turnIndex)];if(!turn)return;turn.confirmationSelections={...(turn.confirmationSelections||{})};if(select.value)turn.confirmationSelections[select.dataset.confirmField]=select.value;else delete turn.confirmationSelections[select.dataset.confirmField];persist();renderMessages();renderDetails();});
-    $("#message-scroll").addEventListener("click",event=>{const confirm=event.target.closest("[data-confirm-turn]");if(confirm){confirmTurn(Number(confirm.dataset.confirmTurn));return;}const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
+    $("#message-scroll").addEventListener("click",event=>{const confirm=event.target.closest("[data-confirm-turn]");if(confirm){confirmTurn(Number(confirm.dataset.confirmTurn));return;}const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}if(event.target.closest("[data-confirm-field],.confirmation-option"))return;const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
     $("#composer").addEventListener("submit",event=>{event.preventDefault();const field=$("#question");const question=field.value;field.value="";submitQuestion(question);});
     $("#question").addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("#composer").requestSubmit();}});
   }
