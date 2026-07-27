@@ -2,17 +2,17 @@
   "use strict";
 
   const REQUIRED_FIELDS = Object.freeze({
-    value: "metric_value",
-    unit: "metric_unit",
-    metric: "metric_name",
-    institution: "institution_name",
-    date: "data_date",
+    value: ["metric_value", "value"],
+    unit: ["metric_unit", "unit"],
+    metric: ["metric_name"],
+    institution: ["institution_name"],
+    date: ["data_date"],
   });
 
   function fieldIndexes(columns) {
     const names = Array.isArray(columns) ? columns.map(String) : [];
     return Object.fromEntries(
-      Object.entries(REQUIRED_FIELDS).map(([role, name]) => [role, names.indexOf(name)])
+      Object.entries(REQUIRED_FIELDS).map(([role, aliases]) => [role, aliases.map(name => names.indexOf(name)).find(index => index >= 0) ?? -1])
     );
   }
 
@@ -45,7 +45,7 @@
     const columns = Array.isArray(payload?.columns) ? payload.columns.map(String) : [];
     const rows = Array.isArray(payload?.rows) ? payload.rows.filter(Array.isArray) : [];
     const indexes = fieldIndexes(columns);
-    const missing = Object.entries(indexes).filter(([, index]) => index < 0).map(([role]) => REQUIRED_FIELDS[role]);
+    const missing = Object.entries(indexes).filter(([, index]) => index < 0).map(([role]) => REQUIRED_FIELDS[role].join("/"));
     return { columns, rows, indexes, missing };
   }
 

@@ -67,6 +67,7 @@ class CandidateFrontendContractTest(unittest.TestCase):
     def test_error_states_and_missing_fields_are_explicit(self) -> None:
         for code in (
             "CLARIFICATION_REQUIRED",
+            "DATA_UNAVAILABLE",
             "UNSUPPORTED_QUESTION",
             "ACCESS_DENIED",
             "SQL_REJECTED",
@@ -111,26 +112,43 @@ class CandidateFrontendContractTest(unittest.TestCase):
         self.assertIn("axisLabels: labels", self.adapter)
         self.assertIn('metricName: cell(row, model.indexes.metric) || "指标值"', self.adapter)
 
-    def test_confirmation_card_and_persistence_use_the_same_conversation(self) -> None:
+    def test_query_plan_drives_results_and_clarification(self) -> None:
         for marker in (
             "confirmation-card",
             "confirmation-intro",
-            "confirmation-options",
-            "confirmation-option",
-            "confirmationSelections",
-            "confirmationEvents",
-            "确认并查询",
+            "query_plan",
+            "clarification_required",
+            "clarification_question",
+            "data_unavailable",
             "修改问题",
-            "最终采用条件",
-            'confirmation:{token:confirmation.token,selections}',
+            "requested_metric_ids",
+            "operator_id",
         ):
             self.assertIn(marker, self.javascript)
         self.assertIn("localStorage.setItem(STORAGE_KEY", self.javascript)
         self.assertIn("localStorage.getItem(STORAGE_KEY", self.javascript)
-        self.assertIn('payload.error?.code==="CLARIFICATION_REQUIRED"', self.javascript)
-        self.assertIn('event.target.closest("[data-confirm-field],.confirmation-option")', self.javascript)
-        self.assertIn("state-needs_confirmation", self.css)
-        self.assertIn("state-unrecognized", self.css)
+        self.assertNotIn("confirmationSelections", self.javascript)
+        self.assertNotIn("confirmTurn", self.javascript)
+        self.assertNotIn("还需确认", self.javascript)
+        self.assertNotIn("增长方式", self.javascript)
+        self.assertNotIn("全部13家", self.javascript)
+
+    def test_frontend_sends_raw_question_once_with_timeout(self) -> None:
+        self.assertEqual(self.javascript.count('fetch("/api/v1/query"'), 1)
+        self.assertIn("question:text", self.javascript)
+        self.assertIn("REQUEST_TIMEOUT_MS = 60000", self.javascript)
+        self.assertIn("new AbortController()", self.javascript)
+        self.assertIn("signal:controller.signal", self.javascript)
+        self.assertNotIn("confirmation:{", self.javascript)
+
+    def test_frontend_does_not_infer_semantics_from_question_keywords(self) -> None:
+        self.assertNotIn("payload?.question ||", self.javascript)
+        for pattern in ("/趋势|", "/排名|", "/同比|", "/占比|", "/多机构|"):
+            self.assertNotIn(pattern, self.javascript)
+        for answer_type in ("single_value", "comparison", "time_series", "ranking", "composite"):
+            self.assertIn(answer_type, self.javascript)
+        self.assertIn('["metric_value", "value"]', self.adapter)
+        self.assertIn('["metric_unit", "unit"]', self.adapter)
 
 
 if __name__ == "__main__":
