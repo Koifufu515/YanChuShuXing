@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import logging
 import operator
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -13,6 +14,9 @@ from typing import Any, Callable, Iterable
 from app.application.errors import QueryExecutionError
 from app.application.models import JsonScalar, QueryPlanExecutionResult
 from app.ports.database_executor import DatabaseExecutor
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -175,10 +179,23 @@ class DeterministicQueryPlanExecutor:
                 current_institution,
                 parameters,
             )
+            if not sql.lstrip().upper().startswith("SELECT "):
+                raise QueryExecutionError("查询计划执行器只允许固定 SELECT 模板。")
+            logger.info(
+                "query_plan_select sql=%s parameters=%s",
+                " ".join(sql.split()),
+                json.dumps(sql_parameters, ensure_ascii=False, sort_keys=True),
+            )
             result = self.database_executor.execute_query(
                 sql,
                 sql_parameters,
                 max_rows=1000,
+            )
+            logger.info(
+                "query_plan_select_completed metric_id=%s institution_id=%s row_count=%s",
+                metric_id,
+                current_institution,
+                result.row_count,
             )
             if result.truncated:
                 raise QueryExecutionError("OP001 查询结果超过单机构1000行限制。")

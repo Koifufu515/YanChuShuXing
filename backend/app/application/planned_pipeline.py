@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import logging
+
 from app.application.errors import ApplicationError
 from app.application.models import (
     AuditEvent,
@@ -12,6 +15,9 @@ from app.application.models import (
 from app.ports.audit_logger import AuditLogger
 from app.ports.query_plan_executor import QueryPlanExecutor
 from app.ports.query_planner import QueryPlanner
+
+
+logger = logging.getLogger(__name__)
 
 
 class PlannedQueryPipeline:
@@ -30,11 +36,40 @@ class PlannedQueryPipeline:
         self.provider_name = provider_name
 
     def run(self, command: QueryCommand) -> QueryOutcome:
+        logger.info(
+            "planned_query_received request_id=%s question=%s",
+            command.request_id,
+            command.question,
+        )
         self._record(command, "request_started")
         metadata: QueryMetadata | None = None
         try:
+            logger.info("llm_query_planner_call request_id=%s", command.request_id)
             plan_result = self.query_planner.plan(command.question)
             metadata = self._metadata(plan_result)
+            plan = plan_result.query_plan
+            status = plan.get("status") if isinstance(plan, dict) else None
+            logger.info(
+                "query_plan_created request_id=%s model=%s latency_ms=%s status=%s semantics=%s",
+                command.request_id,
+                plan_result.model,
+                plan_result.latency_ms,
+                status.get("code") if isinstance(status, dict) else None,
+                json.dumps(
+                    {
+                        "institutions": plan.get("institutions"),
+                        "metrics": plan.get("metrics"),
+                        "time": plan.get("time"),
+                        "operations": [
+                            item.get("operator_id")
+                            for item in plan.get("operations", [])
+                            if isinstance(item, dict)
+                        ],
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
 
             if not plan_result.success:
                 error = ErrorDetail(
@@ -68,6 +103,11 @@ class PlannedQueryPipeline:
                 )
 
             execution = self.query_plan_executor.execute(plan_result.query_plan)
+            logger.info(
+                "query_plan_executed request_id=%s row_count=%s",
+                command.request_id,
+                len(execution.rows),
+            )
             metadata = QueryMetadata(
                 configured_mode="query_plan",
                 executed_generator="query_planner",
