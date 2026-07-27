@@ -14,6 +14,8 @@ class QueryCommand:
     conversation_id: str | None
     request_id: str
     confirmation: dict[str, Any] | None = None
+    clarification_id: str | None = None
+    clarification_answers: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

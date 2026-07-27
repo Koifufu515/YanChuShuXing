@@ -119,8 +119,11 @@ class CandidateFrontendContractTest(unittest.TestCase):
             "query_plan",
             "clarification_required",
             "clarification_question",
+            "clarification_id",
+            "clarification_answers",
             "data_unavailable",
             "修改问题",
+            "确认并查询",
             "requested_metric_ids",
             "operator_id",
         ):
@@ -128,7 +131,7 @@ class CandidateFrontendContractTest(unittest.TestCase):
         self.assertIn("localStorage.setItem(STORAGE_KEY", self.javascript)
         self.assertIn("localStorage.getItem(STORAGE_KEY", self.javascript)
         self.assertNotIn("confirmationSelections", self.javascript)
-        self.assertNotIn("confirmTurn", self.javascript)
+        self.assertIn("confirmTurn", self.javascript)
         self.assertNotIn("还需确认", self.javascript)
         self.assertNotIn("增长方式", self.javascript)
         self.assertNotIn("全部13家", self.javascript)
@@ -138,8 +141,18 @@ class CandidateFrontendContractTest(unittest.TestCase):
         self.assertIn("question:text", self.javascript)
         self.assertIn("REQUEST_TIMEOUT_MS = 60000", self.javascript)
         self.assertIn("new AbortController()", self.javascript)
-        self.assertIn("signal:controller.signal", self.javascript)
+        self.assertIn("postQuery({question:text", self.javascript)
+        self.assertIn("controller.signal", self.javascript)
         self.assertNotIn("confirmation:{", self.javascript)
+
+    def test_clarification_controls_are_generated_only_from_backend_questions(self) -> None:
+        for answer_type in ("single_select", "multi_select", "date", "text"):
+            self.assertIn(answer_type, self.javascript)
+        self.assertIn("payload?.questions", self.javascript)
+        self.assertIn("item.options||[]", self.javascript)
+        self.assertIn("clarificationField", self.javascript)
+        self.assertNotIn("growth_method", self.javascript)
+        self.assertNotIn("institution_scope", self.javascript)
 
     def test_frontend_does_not_infer_semantics_from_question_keywords(self) -> None:
         self.assertNotIn("payload?.question ||", self.javascript)

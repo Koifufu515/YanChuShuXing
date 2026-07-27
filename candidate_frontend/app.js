@@ -166,9 +166,12 @@
   }
 
   function backendClarificationItems(payload) {
-    const plan=queryPlan(payload), status=plan?.status||{};
-    const candidates=[status.items,status.fields,payload?.clarification?.items,payload?.clarification?.fields];
+    const candidates=[payload?.questions,payload?.confirmation?.questions];
     return candidates.find(Array.isArray)||[];
+  }
+
+  function clarificationComplete(items, answers) {
+    return !items.some(item=>item.required!==false&&(answers?.[item.field]===undefined||answers?.[item.field]===""||answers?.[item.field]?.length===0));
   }
 
   function renderClarification(turn,index,payload) {
@@ -182,12 +185,27 @@
     const items=backendClarificationItems(payload);
     if(items.length){
       const fields=node("div","confirmation-fields");
-      items.forEach(item=>{const row=node("div","confirmation-field");row.append(node("strong","",item.label||item.name||item.key||"待确认项"));const content=item.options||item.candidates||item.value;row.append(node("span","confirmed-value",valueOrMissing(content)));fields.append(row);});
+      items.forEach(item=>{
+        const row=node("div","confirmation-field");
+        const head=node("span","confirmation-label");head.append(node("strong","",item.label||item.field||"待确认项"));if(item.reason)head.append(node("small","",item.reason));row.append(head);
+        const current=turn.clarificationAnswers?.[item.field];
+        if(item.type==="single_select"||item.type==="multi_select"){
+          const options=node("div","confirmation-options");
+          (item.options||[]).forEach(option=>{const choice=node("label","confirmation-option");const input=document.createElement("input");input.type=item.type==="multi_select"?"checkbox":"radio";input.name=`clarification-${index}-${item.field}`;input.value=option.value;input.dataset.clarificationField=item.field;input.dataset.turnIndex=String(index);input.dataset.answerType=item.type;input.checked=item.type==="multi_select"?Array.isArray(current)&&current.includes(option.value):current===option.value;choice.append(input,node("span","",option.label));options.append(choice);});
+          row.append(options);
+        }else if(item.type==="date"){
+          const input=node("input","confirmation-select");input.type="date";input.dataset.clarificationField=item.field;input.dataset.turnIndex=String(index);input.dataset.answerType=item.type;input.value=current||"";row.append(input);
+        }else if(item.type==="text"){
+          const input=node("textarea","confirmation-select");input.dataset.clarificationField=item.field;input.dataset.turnIndex=String(index);input.dataset.answerType=item.type;input.value=current||"";input.maxLength=500;row.append(input);
+        }
+        fields.append(row);
+      });
       box.append(fields);
     }
     const actions=node("div","confirmation-actions");
+    const confirm=node("button","primary confirmation-submit","确认并查询");confirm.type="button";confirm.dataset.confirmTurn=String(index);confirm.disabled=!clarificationComplete(items,turn.clarificationAnswers);
     const edit=node("button","ghost confirmation-edit","修改问题");edit.type="button";edit.dataset.editTurn=String(index);
-    actions.append(edit);box.append(actions);
+    actions.append(confirm,edit);box.append(actions);
     return box;
   }
 
@@ -255,19 +273,36 @@
 
   function render() { renderHistory(); renderMessages(); renderDetails(); setPage(state.page); }
 
+  async function postQuery(body, signal) {
+    const response=await fetch("/api/v1/query",{method:"POST",headers:{"Content-Type":"application/json"},signal,body:JSON.stringify(body)});
+    let payload;try{payload=await response.json();}catch(_){payload={error:{code:"INVALID_RESPONSE",message:"服务返回了无法识别的内容。",retryable:true},columns:[],rows:[]};}
+    if(!response.ok&&!payload.error)payload.error={code:`HTTP_${response.status}`,message:"查询服务暂时未完成请求。",retryable:response.status>=500};
+    return payload;
+  }
+
   async function submitQuestion(question) {
     const text=question.trim(); if(text.length<2||state.busy)return;
     let conversation=activeConversation(); if(!conversation) conversation=createConversation(text.slice(0,36)); if(!conversation.turns.length) conversation.title=text.slice(0,36);
     const turn={question:text,pending:true,createdAt:new Date().toISOString(),elapsedMs:0,payload:null}; conversation.turns.push(turn); conversation.updatedAt=turn.createdAt; state.selectedTurn=conversation.turns.length-1; state.busy=true; persist(); render(); $("#send").disabled=true;
     const started=performance.now(); const controller=new AbortController(); const timeoutId=setTimeout(()=>controller.abort(),REQUEST_TIMEOUT_MS);
     try {
-      const response=await fetch("/api/v1/query",{method:"POST",headers:{"Content-Type":"application/json"},signal:controller.signal,body:JSON.stringify({question:text,user_id:USER_ID,conversation_id:conversation.id})});
-      let payload; try { payload=await response.json(); } catch(_){ payload={error:{code:"INVALID_RESPONSE",message:"服务返回了无法识别的内容。",retryable:true},columns:[],rows:[]}; }
-      if(!response.ok&&!payload.error) payload.error={code:`HTTP_${response.status}`,message:"查询服务暂时未完成请求。",retryable:response.status>=500};
-      turn.payload=payload;
+      turn.payload=await postQuery({question:text,user_id:USER_ID,conversation_id:conversation.id},controller.signal);
     } catch (error) { const timedOut=error?.name==="AbortError";turn.payload={question:text,columns:[],rows:[],warnings:[],error:{code:timedOut?"QUERY_TIMEOUT":"NETWORK_ERROR",message:timedOut?"查询时间较长，请稍后重试。":"无法连接言出数行服务，请确认后端已经启动。",retryable:true},metadata:null}; }
     finally { clearTimeout(timeoutId); }
     turn.elapsedMs=Math.max(1,Math.round(performance.now()-started)); turn.pending=false; conversation.updatedAt=new Date().toISOString(); state.busy=false; persist(); $("#send").disabled=false; render();
+  }
+
+  async function confirmTurn(index) {
+    const conversation=activeConversation(),turn=conversation?.turns?.[index],payload=turn?.payload||{};
+    const clarificationId=payload.clarification_id||payload.confirmation?.clarification_id;
+    if(!turn||!clarificationId||state.busy)return;
+    turn.pending=true;state.busy=true;state.selectedTurn=index;persist();render();$("#send").disabled=true;
+    const started=performance.now(),controller=new AbortController(),timeoutId=setTimeout(()=>controller.abort(),REQUEST_TIMEOUT_MS);
+    try{
+      turn.payload=await postQuery({question:turn.question,user_id:USER_ID,conversation_id:conversation.id,clarification_id:clarificationId,clarification_answers:{...(turn.clarificationAnswers||{})}},controller.signal);
+    }catch(error){const timedOut=error?.name==="AbortError";turn.payload={question:turn.question,columns:[],rows:[],warnings:[],error:{code:timedOut?"QUERY_TIMEOUT":"NETWORK_ERROR",message:timedOut?"查询时间较长，请稍后重试。":"无法连接言出数行服务，请确认后端已经启动。",retryable:true},metadata:null};}
+    finally{clearTimeout(timeoutId);}
+    turn.elapsedMs=Math.max(1,Math.round(performance.now()-started));turn.pending=false;conversation.updatedAt=new Date().toISOString();state.busy=false;persist();$("#send").disabled=false;render();
   }
 
   function installFixture() {
@@ -288,7 +323,9 @@
     $("#history-search").addEventListener("input",renderHistory);
     $("#history-list").addEventListener("click",event=>{const target=event.target.closest("[data-conversation-id]");if(!target)return;state.activeId=target.dataset.conversationId;const conversation=activeConversation();state.selectedTurn=conversation?.turns?.length?conversation.turns.length-1:null;state.page="chat";persist();render();});
     document.querySelector("nav").addEventListener("click",event=>{const target=event.target.closest("[data-page]");if(target)setPage(target.dataset.page);});
-    $("#message-scroll").addEventListener("click",event=>{const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
+    const updateClarification=(event,rerender=true)=>{const input=event.target.closest("[data-clarification-field]");if(!input)return;const turn=activeConversation()?.turns?.[Number(input.dataset.turnIndex)];if(!turn)return;turn.clarificationAnswers={...(turn.clarificationAnswers||{})};const field=input.dataset.clarificationField;if(input.dataset.answerType==="multi_select"){const values=[...document.querySelectorAll(`[data-turn-index="${input.dataset.turnIndex}"] [data-clarification-field="${field}"]:checked`)].map(item=>item.value);if(values.length)turn.clarificationAnswers[field]=values;else delete turn.clarificationAnswers[field];}else if(input.value)turn.clarificationAnswers[field]=input.value;else delete turn.clarificationAnswers[field];persist();if(rerender){renderMessages();renderDetails();}else{const items=backendClarificationItems(turn.payload||{});const button=document.querySelector(`[data-confirm-turn="${input.dataset.turnIndex}"]`);if(button)button.disabled=!clarificationComplete(items,turn.clarificationAnswers);}};
+    $("#message-scroll").addEventListener("change",event=>updateClarification(event,true));$("#message-scroll").addEventListener("input",event=>{if(event.target.dataset.answerType==="text")updateClarification(event,false);});
+    $("#message-scroll").addEventListener("click",event=>{const confirm=event.target.closest("[data-confirm-turn]");if(confirm){confirmTurn(Number(confirm.dataset.confirmTurn));return;}const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}if(event.target.closest("[data-clarification-field],.confirmation-option"))return;const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
     $("#composer").addEventListener("submit",event=>{event.preventDefault();const field=$("#question");const question=field.value;field.value="";submitQuestion(question);});
     $("#question").addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("#composer").requestSubmit();}});
   }

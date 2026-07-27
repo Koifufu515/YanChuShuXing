@@ -197,10 +197,75 @@ def validate_business_rules(
 
     status = plan.get("status")
     status_code = status.get("code") if isinstance(status, dict) else None
+    clarification_questions = status.get("questions", []) if isinstance(status, dict) else []
     operations = plan.get("operations")
     operation_list = operations if isinstance(operations, list) else []
     checks = plan.get("checks")
     check_list = checks if isinstance(checks, list) else []
+
+    if status_code == "clarification_required" and isinstance(clarification_questions, list):
+        fields = [item.get("field") for item in clarification_questions if isinstance(item, dict)]
+        if len(fields) != len(set(fields)):
+            errors.append(
+                {
+                    "path": "status.questions",
+                    "message": "结构化澄清问题的field不得重复。",
+                }
+            )
+        official_institution_ids = {
+            item.get("institution_id")
+            for item in context.get("institutions", [])
+            if isinstance(item, dict)
+        }
+        official_metric_ids = {
+            item.get("metric_id")
+            for item in context.get("metrics", [])
+            if isinstance(item, dict)
+        }
+        official_operator_ids = {
+            item.get("operator_id")
+            for item in context.get("operators", [])
+            if isinstance(item, dict)
+        }
+        for index, item in enumerate(clarification_questions):
+            if not isinstance(item, dict):
+                continue
+            field = str(item.get("field") or "")
+            option_values = {
+                option.get("value")
+                for option in item.get("options", [])
+                if isinstance(option, dict)
+            }
+            if "metric" in field and not option_values <= official_metric_ids:
+                errors.append(
+                    {
+                        "path": f"status.questions.{index}.options",
+                        "message": "指标澄清候选项只能使用正式ZB指标编号。",
+                    }
+                )
+            if "institution" in field and not option_values <= (
+                official_institution_ids | {"all_official_institutions"}
+            ):
+                errors.append(
+                    {
+                        "path": f"status.questions.{index}.options",
+                        "message": "机构澄清候选项只能使用正式ORG编号或正式全机构范围。",
+                    }
+                )
+            if field == "analysis_operator" and not option_values <= official_operator_ids:
+                errors.append(
+                    {
+                        "path": f"status.questions.{index}.options",
+                        "message": "分析算子候选项只能使用正式OP编号。",
+                    }
+                )
+    elif clarification_questions:
+        errors.append(
+            {
+                "path": "status.questions",
+                "message": "只有clarification_required状态可以返回澄清问题。",
+            }
+        )
 
     all_dates = collect_plan_dates(plan, errors)
     out_of_range = [

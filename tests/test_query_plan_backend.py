@@ -106,6 +106,16 @@ class StaticPlanner:
         return replace(self.result, question=question)
 
 
+class SequencePlanner:
+    def __init__(self, results):
+        self.results = list(results)
+        self.questions = []
+
+    def plan(self, question):
+        self.questions.append(question)
+        return replace(self.results.pop(0), question=question)
+
+
 class StaticPlanExecutor:
     def execute(self, query_plan):
         return QueryPlanExecutionResult(
@@ -446,7 +456,27 @@ class PlannedPipelineTest(unittest.TestCase):
         plan["status"] = {
             "code": status_code,
             "reason": "口径尚未确认" if status_code != "executable" else None,
-            "clarification_question": None,
+            "clarification_question": "请确认指标和时间。" if status_code == "clarification_required" else None,
+            "questions": [
+                {
+                    "field": "metric",
+                    "label": "您想查询哪项指标？",
+                    "reason": "贷款情况没有说明具体指标。",
+                    "type": "single_select",
+                    "options": [
+                        {"value": "ZB002", "label": "各项贷款余额"}
+                    ],
+                    "required": True,
+                },
+                {
+                    "field": "date",
+                    "label": "您想查询哪个日期？",
+                    "reason": "原问题没有提供时间。",
+                    "type": "date",
+                    "options": [],
+                    "required": True,
+                },
+            ] if status_code == "clarification_required" else [],
         }
         validation = QueryPlanValidation(True, [], True, [], plan)
         return QueryPlanResult(
@@ -496,6 +526,59 @@ class PlannedPipelineTest(unittest.TestCase):
         self.assertEqual(outcome.error.code, "PENDING_PROJECT_DEFINITION")
         self.assertEqual(outcome.metadata.failure_reason, "pending_project_definition")
         self.assertEqual(audit.events[-1].event_type, "query_failed")
+
+    def test_structured_clarification_is_replanned_after_valid_answers(self):
+        audit = RecordingAudit()
+        planner = SequencePlanner(
+            [self._result("clarification_required"), self._result("executable")]
+        )
+        pipeline = PlannedQueryPipeline(planner, StaticPlanExecutor(), audit)
+        original_question = "帮我看看江苏省A市农商行的贷款情况。"
+        first = pipeline.run(QueryCommand(original_question, "u", "conv", "req1"))
+
+        self.assertEqual(first.error.code, "CLARIFICATION_REQUIRED")
+        self.assertEqual(first.confirmation["status"], "clarification_required")
+        self.assertEqual(
+            [item["field"] for item in first.confirmation["questions"]],
+            ["metric", "date"],
+        )
+        self.assertTrue(
+            all(item["field"] != "growth_method" for item in first.confirmation["questions"])
+        )
+
+        second = pipeline.run(
+            QueryCommand(
+                original_question,
+                "u",
+                "conv",
+                "req2",
+                clarification_id=first.confirmation["clarification_id"],
+                clarification_answers={"metric": "ZB002", "date": "2025-12-31"},
+            )
+        )
+
+        self.assertIsNone(second.error)
+        self.assertEqual(second.rows, [[1]])
+        self.assertEqual(len(planner.questions), 2)
+        self.assertIn('\"field\":\"metric\"', planner.questions[1])
+        self.assertIn('\"value\":\"ZB002\"', planner.questions[1])
+
+    def test_forged_clarification_option_is_rejected_before_replanning(self):
+        planner = SequencePlanner([self._result("clarification_required")])
+        pipeline = PlannedQueryPipeline(planner, StaticPlanExecutor(), RecordingAudit())
+        first = pipeline.run(QueryCommand("问题", "u", "conv", "req1"))
+        rejected = pipeline.run(
+            QueryCommand(
+                "问题",
+                "u",
+                "conv",
+                "req2",
+                clarification_id=first.confirmation["clarification_id"],
+                clarification_answers={"metric": "ZB999", "date": "2025-12-31"},
+            )
+        )
+        self.assertEqual(rejected.error.code, "INVALID_CONFIRMATION")
+        self.assertEqual(len(planner.questions), 1)
 
 
 if __name__ == "__main__":

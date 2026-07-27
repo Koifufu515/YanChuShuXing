@@ -96,6 +96,7 @@ class GeneratorModeTest(unittest.TestCase):
         expected_keys = {
             "request_id", "question", "sql", "columns", "rows",
             "summary", "warnings", "error", "metadata", "confirmation",
+            "status", "clarification_id", "original_question", "questions",
         }
         for mode in ("rule", "llm", "hybrid"):
             with self.subTest(mode=mode):

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://yanchushuxing.local/schemas/query-plan-v1.3.json",
-  "title": "言出数行标准查询计划 v1.3",
-  "description": "银行智能问数查询计划结构约束。v1.3统一OP001机构、指标输入契约，并禁止检查参数使用单数metric_id。",
+  "$id": "https://yanchushuxing.local/schemas/query-plan-v1.4.json",
+  "title": "言出数行标准查询计划 v1.4",
+  "description": "银行智能问数查询计划结构约束。v1.4增加由查询规划器生成的结构化澄清问题。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -44,6 +44,105 @@
             "string",
             "null"
           ]
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "field",
+              "label",
+              "reason",
+              "type",
+              "options",
+              "required"
+            ],
+            "properties": {
+              "field": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,63}$"
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "single_select",
+                  "multi_select",
+                  "date",
+                  "text"
+                ]
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "value",
+                    "label"
+                  ],
+                  "properties": {
+                    "value": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 120
+                    }
+                  }
+                },
+                "uniqueItems": true
+              },
+              "required": {
+                "type": "boolean"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "single_select",
+                        "multi_select"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "options": {
+                      "minItems": 1
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "options": {
+                      "maxItems": 0
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "maxItems": 8
         }
       }
     },
@@ -943,6 +1042,9 @@
             "properties": {
               "clarification_question": {
                 "type": "null"
+              },
+              "questions": {
+                "maxItems": 0
               }
             }
           }
@@ -968,8 +1070,14 @@
               "clarification_question": {
                 "type": "string",
                 "minLength": 1
+              },
+              "questions": {
+                "minItems": 1
               }
-            }
+            },
+            "required": [
+              "questions"
+            ]
           }
         }
       }

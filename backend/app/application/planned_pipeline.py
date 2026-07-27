@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
+from threading import RLock
+from time import monotonic
+from typing import Any
+from uuid import uuid4
 
 from app.application.errors import ApplicationError
 from app.application.models import (
@@ -20,6 +25,15 @@ from app.ports.query_planner import QueryPlanner
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class _PendingClarification:
+    original_question: str
+    user_id: str
+    conversation_id: str | None
+    questions: list[dict[str, Any]]
+    created_at: float
+
+
 class PlannedQueryPipeline:
     """正式数据环境的查询规划、确定性执行与结构化返回链路。"""
 
@@ -34,6 +48,9 @@ class PlannedQueryPipeline:
         self.query_plan_executor = query_plan_executor
         self.audit_logger = audit_logger
         self.provider_name = provider_name
+        self._clarifications: dict[str, _PendingClarification] = {}
+        self._clarification_lock = RLock()
+        self._clarification_ttl_seconds = 30 * 60
 
     def run(self, command: QueryCommand) -> QueryOutcome:
         logger.info(
@@ -44,8 +61,24 @@ class PlannedQueryPipeline:
         self._record(command, "request_started")
         metadata: QueryMetadata | None = None
         try:
+            planning_question = command.question
+            if command.clarification_id is not None:
+                try:
+                    planning_question = self._consume_clarification(command)
+                except ValueError as exc:
+                    error = ErrorDetail(
+                        code="INVALID_CONFIRMATION",
+                        message=str(exc),
+                        retryable=False,
+                    )
+                    self._record(command, "query_failed", error_code=error.code)
+                    return QueryOutcome(
+                        request_id=command.request_id,
+                        question=command.question,
+                        error=error,
+                    )
             logger.info("llm_query_planner_call request_id=%s", command.request_id)
-            plan_result = self.query_planner.plan(command.question)
+            plan_result = self.query_planner.plan(planning_question)
             metadata = self._metadata(plan_result)
             plan = plan_result.query_plan
             status = plan.get("status") if isinstance(plan, dict) else None
@@ -95,11 +128,18 @@ class PlannedQueryPipeline:
                     failure_reason=str(status_code or "invalid_status"),
                 )
                 self._record(command, "query_failed", error_code=error.code)
+                clarification = None
+                if status_code == "clarification_required":
+                    clarification = self._issue_clarification(
+                        command,
+                        status if isinstance(status, dict) else {},
+                    )
                 return QueryOutcome(
                     request_id=command.request_id,
                     question=command.question,
                     error=error,
                     metadata=metadata,
+                    confirmation=clarification,
                 )
 
             execution = self.query_plan_executor.execute(plan_result.query_plan)
@@ -145,6 +185,135 @@ class PlannedQueryPipeline:
         except Exception:
             self._record(command, "query_failed", error_code="INTERNAL_ERROR")
             raise
+
+    def _issue_clarification(
+        self,
+        command: QueryCommand,
+        status: dict[str, Any],
+    ) -> dict[str, Any]:
+        questions = status.get("questions")
+        if not isinstance(questions, list) or not questions:
+            raise ValueError("查询规划器没有返回可执行的结构化澄清问题。")
+        clarification_id = f"clar_{uuid4().hex}"
+        pending = _PendingClarification(
+            original_question=command.question,
+            user_id=command.user_id,
+            conversation_id=command.conversation_id,
+            questions=questions,
+            created_at=monotonic(),
+        )
+        with self._clarification_lock:
+            self._discard_expired_clarifications()
+            self._clarifications[clarification_id] = pending
+        return {
+            "status": "clarification_required",
+            "clarification_id": clarification_id,
+            "original_question": command.question,
+            "questions": questions,
+        }
+
+    def _consume_clarification(self, command: QueryCommand) -> str:
+        clarification_id = command.clarification_id or ""
+        with self._clarification_lock:
+            self._discard_expired_clarifications()
+            pending = self._clarifications.get(clarification_id)
+        if pending is None:
+            raise ValueError("该确认请求已失效，请重新提交原问题。")
+        if pending.user_id != command.user_id or pending.conversation_id != command.conversation_id:
+            raise ValueError("该确认请求不属于当前用户或会话。")
+        if command.question != pending.original_question:
+            raise ValueError("确认请求中的原问题与待确认问题不一致。")
+        answers = command.clarification_answers
+        if not isinstance(answers, dict):
+            raise ValueError("请完成后端要求的确认内容。")
+
+        expected = {str(item.get("field")): item for item in pending.questions}
+        if set(answers) - set(expected):
+            raise ValueError("确认答案包含后端未要求的字段。")
+        normalized: list[dict[str, Any]] = []
+        for field, question in expected.items():
+            value = answers.get(field)
+            if self._is_empty_answer(value):
+                if question.get("required", True):
+                    raise ValueError(f"请填写：{question.get('label') or field}。")
+                normalized.append(
+                    {
+                        "field": field,
+                        "label": question.get("label"),
+                        "value": None,
+                        "selected_labels": [],
+                    }
+                )
+                continue
+            normalized_value, selected_labels = self._validate_answer(question, value)
+            normalized.append(
+                {
+                    "field": field,
+                    "label": question.get("label"),
+                    "value": normalized_value,
+                    "selected_labels": selected_labels,
+                }
+            )
+
+        with self._clarification_lock:
+            self._clarifications.pop(clarification_id, None)
+        return "\n\n".join(
+            [
+                f"用户原始问题：\n{pending.original_question}",
+                "用户已完成后端要求的结构化澄清，以下JSON是本轮确认事实：\n"
+                + json.dumps(normalized, ensure_ascii=False, separators=(",", ":")),
+                "请结合原始问题和确认事实重新生成完整QueryPlan；不得再次询问已经确认的字段。",
+            ]
+        )
+
+    @staticmethod
+    def _is_empty_answer(value: Any) -> bool:
+        return value is None or value == "" or value == []
+
+    @staticmethod
+    def _validate_answer(
+        question: dict[str, Any],
+        value: Any,
+    ) -> tuple[Any, list[str]]:
+        answer_type = question.get("type")
+        options = question.get("options") if isinstance(question.get("options"), list) else []
+        option_labels = {
+            str(item.get("value")): str(item.get("label"))
+            for item in options
+            if isinstance(item, dict) and item.get("value") is not None
+        }
+        if answer_type == "single_select":
+            selected = str(value)
+            if selected not in option_labels:
+                raise ValueError("确认答案不在后端提供的候选项中。")
+            return selected, [option_labels[selected]]
+        if answer_type == "multi_select":
+            if not isinstance(value, list) or not value:
+                raise ValueError("请至少选择一个后端提供的候选项。")
+            selected = [str(item) for item in value]
+            if len(set(selected)) != len(selected) or any(item not in option_labels for item in selected):
+                raise ValueError("确认答案包含无效或重复的候选项。")
+            return selected, [option_labels[item] for item in selected]
+        if answer_type == "date":
+            try:
+                from datetime import date
+
+                date.fromisoformat(str(value))
+            except ValueError as exc:
+                raise ValueError("日期必须使用YYYY-MM-DD格式。") from exc
+            return str(value), []
+        if answer_type == "text":
+            text = str(value).strip()
+            if len(text) > 500:
+                raise ValueError("补充说明不能超过500个字符。")
+            return text, []
+        raise ValueError("后端返回了不支持的确认控件类型。")
+
+    def _discard_expired_clarifications(self) -> None:
+        cutoff = monotonic() - self._clarification_ttl_seconds
+        expired = [key for key, value in self._clarifications.items() if value.created_at < cutoff]
+        for key in expired:
+            self._clarifications.pop(key, None)
 
     def _metadata(
         self,

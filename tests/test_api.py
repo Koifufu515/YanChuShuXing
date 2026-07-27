@@ -103,6 +103,10 @@ class QueryAPITest(unittest.TestCase):
                         "error",
                         "metadata",
                         "confirmation",
+                        "status",
+                        "clarification_id",
+                        "original_question",
+                        "questions",
                     },
                 )
 

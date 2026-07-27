@@ -30,6 +30,8 @@ def query(
             conversation_id=request.conversation_id,
             request_id=f"req_{uuid4().hex}",
             confirmation=request.confirmation,
+            clarification_id=request.clarification_id,
+            clarification_answers=request.clarification_answers,
         )
     )
     response.status_code = _status_for(outcome.error.code if outcome.error else None)

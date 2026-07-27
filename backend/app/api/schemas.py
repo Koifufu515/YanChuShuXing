@@ -13,6 +13,8 @@ class QueryRequestDTO(BaseModel):
     user_id: str = Field(min_length=1, max_length=64)
     conversation_id: str | None = Field(default=None, max_length=128)
     confirmation: dict[str, Any] | None = None
+    clarification_id: str | None = Field(default=None, min_length=1, max_length=128)
+    clarification_answers: dict[str, Any] | None = None
 
     @field_validator("question")
     @classmethod
@@ -40,10 +42,18 @@ class QueryResponseDTO(BaseModel):
     error: ErrorDTO | None
     metadata: dict[str, Any] | None = None
     confirmation: dict[str, Any] | None = None
+    status: str | None = None
+    clarification_id: str | None = None
+    original_question: str | None = None
+    questions: list[dict[str, Any]] = Field(default_factory=list)
 
     @classmethod
     def from_outcome(cls, outcome: QueryOutcome) -> "QueryResponseDTO":
         error = ErrorDTO(**outcome.error.__dict__) if outcome.error else None
+        plan = outcome.metadata.query_plan if outcome.metadata else None
+        plan_status = plan.get("status") if isinstance(plan, dict) else None
+        status_code = plan_status.get("code") if isinstance(plan_status, dict) else None
+        clarification = outcome.confirmation or {}
         return cls(
             request_id=outcome.request_id,
             question=outcome.question,
@@ -55,4 +65,8 @@ class QueryResponseDTO(BaseModel):
             error=error,
             metadata=asdict(outcome.metadata) if outcome.metadata else None,
             confirmation=outcome.confirmation,
+            status=status_code,
+            clarification_id=clarification.get("clarification_id"),
+            original_question=clarification.get("original_question"),
+            questions=clarification.get("questions") or [],
         )
