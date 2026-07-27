@@ -4,7 +4,7 @@ import calendar
 import json
 import operator
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from time import perf_counter
@@ -21,6 +21,7 @@ class ExecutionValue:
     data: Any
     unit: str | None = None
     operator_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class DeterministicQueryPlanExecutor:
@@ -351,12 +352,25 @@ class DeterministicQueryPlanExecutor:
         parameters: dict[str, Any],
     ) -> ExecutionValue:
         self._require_input_count(inputs, 2, "OP006")
+        result_unit_raw = parameters.get("result_unit") or parameters.get("unit")
+        result_unit = str(result_unit_raw) if result_unit_raw is not None else "%"
+        multiplier_raw = parameters.get("multiplier")
+        if multiplier_raw is None:
+            multiplier = Decimal(100) if result_unit == "%" else Decimal(1)
+        else:
+            multiplier = self._decimal(multiplier_raw, "OP006.multiplier")
+        if multiplier <= 0:
+            raise QueryExecutionError("OP006.multiplier 必须大于0。")
         return self._binary_transform(
             inputs[0],
             inputs[1],
-            self._ratio,
-            "ratio",
-            result_unit="%",
+            lambda numerator, denominator: self._quotient(
+                numerator,
+                denominator,
+                multiplier,
+            ),
+            "ratio" if result_unit == "%" else "quotient",
+            result_unit=result_unit,
             require_same_unit=False,
         )
 
@@ -393,8 +407,7 @@ class DeterministicQueryPlanExecutor:
         inputs: list[ExecutionValue],
         parameters: dict[str, Any],
     ) -> ExecutionValue:
-        self._require_input_count(inputs, 1, "OP009")
-        records = self._records(inputs[0])
+        records, input_unit = self._combined_records(inputs, "OP009")
         grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
         for record in records:
             grouped[
@@ -423,7 +436,7 @@ class DeterministicQueryPlanExecutor:
                     "record_count": len(group),
                 }
             )
-        return ExecutionValue(kind="records", data=output, unit=inputs[0].unit)
+        return ExecutionValue(kind="records", data=output, unit=input_unit)
 
     def _op_province_average(
         self,
@@ -467,12 +480,12 @@ class DeterministicQueryPlanExecutor:
         inputs: list[ExecutionValue],
         parameters: dict[str, Any],
     ) -> ExecutionValue:
-        self._require_input_count(inputs, 1, "OP011")
+        records, _ = self._combined_records(inputs, "OP011")
         order = parameters.get("order")
         if order not in {"ascending", "descending"}:
             raise QueryExecutionError("OP011.order 不合法。")
         return self._rank_records(
-            self._records(inputs[0]),
+            records,
             reverse=order == "descending",
         )
 
@@ -481,14 +494,39 @@ class DeterministicQueryPlanExecutor:
         inputs: list[ExecutionValue],
         parameters: dict[str, Any],
     ) -> ExecutionValue:
-        self._require_input_count(inputs, 1, "OP012")
+        records, _ = self._combined_records(inputs, "OP012")
         direction = parameters.get("performance_direction")
         if direction not in {"higher_is_better", "lower_is_better"}:
             raise QueryExecutionError("OP012.performance_direction 不合法。")
         return self._rank_records(
-            self._records(inputs[0]),
+            records,
             reverse=direction == "higher_is_better",
         )
+
+    def _combined_records(
+        self,
+        inputs: list[ExecutionValue],
+        operator_id: str,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        if not inputs:
+            raise QueryExecutionError(f"{operator_id} 至少需要1个输入。")
+        records: list[dict[str, Any]] = []
+        units: set[str] = set()
+        for value in inputs:
+            current_records = self._records(value)
+            records.extend(dict(item) for item in current_records)
+            if value.unit:
+                units.add(str(value.unit))
+            units.update(
+                str(item.get("unit"))
+                for item in current_records
+                if item.get("unit") is not None
+            )
+        if not records:
+            raise QueryExecutionError(f"{operator_id} 没有可处理的记录。")
+        if len(units) > 1:
+            raise QueryExecutionError(f"{operator_id} 输入记录单位不一致。")
+        return records, next(iter(units)) if units else None
 
     def _op_take_n(
         self,
@@ -542,12 +580,20 @@ class DeterministicQueryPlanExecutor:
             raise QueryExecutionError("OP014.type 必须是 max 或 min。")
         values = [self._decimal(item.get("value"), "OP014") for item in records]
         extreme = max(values) if extreme_type == "max" else min(values)
-        selected = [
-            dict(item)
-            for item in records
-            if self._decimal(item.get("value"), "OP014") == extreme
-        ]
-        return ExecutionValue(kind="records", data=selected, unit=inputs[0].unit)
+        selected: list[dict[str, Any]] = []
+        result_type = "maximum" if extreme_type == "max" else "minimum"
+        for item in records:
+            if self._decimal(item.get("value"), "OP014") != extreme:
+                continue
+            current = dict(item)
+            current["result_type"] = result_type
+            selected.append(current)
+        return ExecutionValue(
+            kind="records",
+            data=selected,
+            unit=inputs[0].unit,
+            metadata={"result_type": result_type},
+        )
 
     def _op_threshold(
         self,
@@ -595,7 +641,55 @@ class DeterministicQueryPlanExecutor:
                 comparison_operator,
             )
         ]
-        return ExecutionValue(kind="records", data=selected, unit=inputs[0].unit)
+        count_by, count_unit = self._infer_count_dimension(records)
+        if count_by == "date":
+            population_count = len(
+                {
+                    item.get("date")
+                    for item in records
+                    if item.get("date") is not None
+                }
+            )
+        elif count_by == "institution":
+            population_count = len(
+                {
+                    item.get("institution_id")
+                    for item in records
+                    if item.get("institution_id") is not None
+                }
+            )
+        else:
+            population_count = len(records)
+        return ExecutionValue(
+            kind="records",
+            data=selected,
+            unit=inputs[0].unit,
+            metadata={
+                "count_by": count_by,
+                "count_unit": count_unit,
+                "population_count": population_count,
+            },
+        )
+
+    @staticmethod
+    def _infer_count_dimension(
+        records: list[dict[str, Any]],
+    ) -> tuple[str, str]:
+        dates = {
+            item.get("date")
+            for item in records
+            if item.get("date") is not None
+        }
+        institutions = {
+            item.get("institution_id")
+            for item in records
+            if item.get("institution_id") is not None
+        }
+        if len(dates) > 1 and len(institutions) <= 1:
+            return "date", "天"
+        if len(institutions) > 1 and len(dates) <= 1:
+            return "institution", "家"
+        return "record", "条"
 
     def _op_count(
         self,
@@ -604,15 +698,78 @@ class DeterministicQueryPlanExecutor:
     ) -> ExecutionValue:
         self._require_input_count(inputs, 1, "OP017")
         value = inputs[0]
+        requested_count_by = parameters.get("count_by")
+        count_by = (
+            requested_count_by
+            if requested_count_by in {"date", "institution", "record"}
+            else value.metadata.get("count_by")
+        )
+        if count_by not in {"date", "institution", "record"}:
+            count_by = "record"
+
         if value.kind == "records":
-            count = len(value.data)
+            records = self._records(value)
+            if count_by == "date":
+                count = len(
+                    {
+                        item.get("date")
+                        for item in records
+                        if item.get("date") is not None
+                    }
+                )
+            elif count_by == "institution":
+                count = len(
+                    {
+                        item.get("institution_id")
+                        for item in records
+                        if item.get("institution_id") is not None
+                    }
+                )
+            else:
+                count = len(records)
         elif value.kind == "composite":
             count = len(value.data.get("items", []))
         elif isinstance(value.data, list):
             count = len(value.data)
         else:
             count = 1
-        return ExecutionValue(kind="count", data={"count": count}, unit=None)
+
+        unit = parameters.get("unit")
+        if not isinstance(unit, str) or not unit:
+            unit = value.metadata.get("count_unit")
+        if not isinstance(unit, str) or not unit:
+            unit = {
+                "date": "天",
+                "institution": "家",
+                "record": "条",
+            }[count_by]
+        population_count = value.metadata.get("population_count")
+        share_percent: Decimal | None = None
+        if (
+            isinstance(population_count, int)
+            and population_count > 0
+            and count_by == "date"
+        ):
+            share_percent = (
+                Decimal(count)
+                / Decimal(population_count)
+                * Decimal(100)
+            )
+        return ExecutionValue(
+            kind="count",
+            data={
+                "count": count,
+                "count_by": count_by,
+                "population_count": population_count,
+                "share_percent": share_percent,
+            },
+            unit=unit,
+            metadata={
+                "count_by": count_by,
+                "count_unit": unit,
+                "population_count": population_count,
+            },
+        )
 
     def _op_trend(
         self,
@@ -763,8 +920,16 @@ class DeterministicQueryPlanExecutor:
                     )
                 return ExecutionValue(
                     kind="scalar",
-                    data={"value": function(left_value, right_value)},
+                    data={
+                        "value": function(left_value, right_value),
+                        "left_value": left_value,
+                        "right_value": right_value,
+                        "left_record": dict(left_records[0]),
+                        "right_record": dict(right_records[0]),
+                        "operation": result_name,
+                    },
                     unit=result_unit or left_records[0].get("unit"),
+                    metadata={"operation": result_name},
                 )
             return self._aligned_record_transform(
                 left_records,
@@ -780,8 +945,14 @@ class DeterministicQueryPlanExecutor:
             self._require_same_unit([left_unit, right_unit], result_name)
         return ExecutionValue(
             kind="scalar",
-            data={"value": function(left_value, right_value)},
+            data={
+                "value": function(left_value, right_value),
+                "left_value": left_value,
+                "right_value": right_value,
+                "operation": result_name,
+            },
             unit=result_unit or left_unit,
+            metadata={"operation": result_name},
         )
 
     def _aligned_record_transform(
@@ -792,35 +963,42 @@ class DeterministicQueryPlanExecutor:
         result_unit: str | None,
         require_same_unit: bool,
     ) -> ExecutionValue:
-        def candidate_key(record: dict[str, Any], include_institution: bool) -> tuple[Any, ...]:
-            base = (record.get("date"), record.get("metric_id"))
-            return (
-                (record.get("institution_id"), *base)
-                if include_institution
-                else base
-            )
+        def unique_map(
+            records: list[dict[str, Any]],
+            fields: tuple[str, ...],
+        ) -> dict[tuple[Any, ...], dict[str, Any]] | None:
+            result: dict[tuple[Any, ...], dict[str, Any]] = {}
+            for record in records:
+                key = tuple(record.get(field) for field in fields)
+                if key in result:
+                    return None
+                result[key] = record
+            return result
 
-        for include_institution in (False, True):
-            left_keys = [candidate_key(item, include_institution) for item in left_records]
-            right_keys = [candidate_key(item, include_institution) for item in right_records]
-            if len(set(left_keys)) != len(left_keys) or len(set(right_keys)) != len(right_keys):
-                continue
-            if set(left_keys) != set(right_keys):
-                continue
-            right_map = dict(zip(right_keys, right_records))
+        def transform_pairs(
+            pairs: list[tuple[dict[str, Any], dict[str, Any]]],
+        ) -> ExecutionValue:
             output: list[dict[str, Any]] = []
-            for key, left_record in zip(left_keys, left_records):
-                right_record = right_map[key]
+            for left_record, right_record in pairs:
                 if require_same_unit:
                     self._require_same_unit(
                         [left_record.get("unit"), right_record.get("unit")],
                         "aligned operation",
                     )
-                current = dict(left_record)
-                current["value"] = function(
-                    self._decimal(left_record.get("value"), "aligned operation"),
-                    self._decimal(right_record.get("value"), "aligned operation"),
+                left_value = self._decimal(
+                    left_record.get("value"),
+                    "aligned operation",
                 )
+                right_value = self._decimal(
+                    right_record.get("value"),
+                    "aligned operation",
+                )
+                current = dict(left_record)
+                current["left_value"] = left_value
+                current["right_value"] = right_value
+                current["left_date"] = left_record.get("date")
+                current["right_date"] = right_record.get("date")
+                current["value"] = function(left_value, right_value)
                 if result_unit is not None:
                     current["unit"] = result_unit
                 output.append(current)
@@ -829,13 +1007,71 @@ class DeterministicQueryPlanExecutor:
                 data=output,
                 unit=result_unit or left_records[0].get("unit"),
             )
-        raise QueryExecutionError("两个记录集合无法按机构、日期和指标对齐。")
+
+        exact_fields = ("institution_id", "date", "metric_id")
+        left_exact = unique_map(left_records, exact_fields)
+        right_exact = unique_map(right_records, exact_fields)
+        if (
+            left_exact is not None
+            and right_exact is not None
+            and set(left_exact) == set(right_exact)
+        ):
+            return transform_pairs(
+                [(left_exact[key], right_exact[key]) for key in left_exact]
+            )
+
+        period_fields = ("institution_id", "metric_id")
+        left_period = unique_map(left_records, period_fields)
+        right_period = unique_map(right_records, period_fields)
+        if (
+            left_period is not None
+            and right_period is not None
+            and set(left_period) == set(right_period)
+        ):
+            return transform_pairs(
+                [(left_period[key], right_period[key]) for key in left_period]
+            )
+
+        baseline_fields = ("date", "metric_id")
+        right_baseline = unique_map(right_records, baseline_fields)
+        if right_baseline is not None:
+            pairs = []
+            for left_record in left_records:
+                key = tuple(left_record.get(field) for field in baseline_fields)
+                baseline = right_baseline.get(key)
+                if baseline is None:
+                    pairs = []
+                    break
+                pairs.append((left_record, baseline))
+            if pairs:
+                return transform_pairs(pairs)
+
+        left_baseline = unique_map(left_records, baseline_fields)
+        if left_baseline is not None:
+            pairs = []
+            for right_record in right_records:
+                key = tuple(right_record.get(field) for field in baseline_fields)
+                baseline = left_baseline.get(key)
+                if baseline is None:
+                    pairs = []
+                    break
+                pairs.append((baseline, right_record))
+            if pairs:
+                return transform_pairs(pairs)
+
+        raise QueryExecutionError(
+            "两个记录集合无法按机构、日期或比较期间对齐。"
+        )
 
     @staticmethod
-    def _ratio(numerator: Decimal, denominator: Decimal) -> Decimal:
+    def _quotient(
+        numerator: Decimal,
+        denominator: Decimal,
+        multiplier: Decimal,
+    ) -> Decimal:
         if denominator == 0:
-            raise QueryExecutionError("比例计算分母为0。")
-        return numerator / denominator * Decimal(100)
+            raise QueryExecutionError("除法计算分母为0。")
+        return numerator / denominator * multiplier
 
     @staticmethod
     def _growth(current: Decimal, base: Decimal) -> Decimal:
@@ -1060,12 +1296,18 @@ class DeterministicQueryPlanExecutor:
         if not isinstance(expected, list) or not expected:
             raise QueryExecutionError("metric_completeness 缺少 metric_ids。")
         expected_set = set(expected)
-        grouped: dict[tuple[Any, Any], set[Any]] = defaultdict(set)
+        requested_institutions = parameters.get("institution_ids")
+        grouped: dict[Any, set[Any]] = defaultdict(set)
         for record in records:
-            grouped[(record.get("institution_id"), record.get("date"))].add(
-                record.get("metric_id")
-            )
-        if not grouped or any(not expected_set.issubset(actual) for actual in grouped.values()):
+            grouped[record.get("institution_id")].add(record.get("metric_id"))
+        if isinstance(requested_institutions, list) and requested_institutions:
+            institutions = requested_institutions
+        else:
+            institutions = [key for key in grouped if key is not None]
+        if not institutions or any(
+            not expected_set.issubset(grouped.get(institution_id, set()))
+            for institution_id in institutions
+        ):
             raise QueryExecutionError("metric_completeness 检查失败。")
 
     @staticmethod
@@ -1101,6 +1343,19 @@ class DeterministicQueryPlanExecutor:
         if value.kind == "records":
             return self._render_records(self._records(value), digits)
         if value.kind == "scalar":
+            if (
+                value.data.get("operation")
+                in {"difference", "absolute_difference"}
+                and isinstance(value.data.get("left_record"), dict)
+                and isinstance(value.data.get("right_record"), dict)
+            ):
+                labels = output_plan.get("result_fields")
+                labels = labels if isinstance(labels, list) else []
+                return self._render_comparison_composite(
+                    [(0, value)],
+                    labels,
+                    digits,
+                )
             numeric = self._json_number(value.data.get("value"), digits)
             unit = value.unit
             summary = f"计算结果为{numeric}{unit or ''}。"
@@ -1110,7 +1365,30 @@ class DeterministicQueryPlanExecutor:
             return ["date"], [[resolved]], f"基期日期为{resolved}。"
         if value.kind == "count":
             count = int(value.data.get("count", 0))
-            return ["count"], [[count]], f"共{count}条结果。"
+            unit = output_plan.get("unit") or value.unit or "条"
+            population_count = value.data.get("population_count")
+            share_percent = value.data.get("share_percent")
+            if (
+                unit == "天"
+                and isinstance(population_count, int)
+                and population_count > 0
+                and share_percent is not None
+            ):
+                rendered_share = self._json_number(share_percent, 2)
+                return (
+                    ["count", "unit", "population_count", "share_percent"],
+                    [[count, unit, population_count, rendered_share]],
+                    (
+                        f"计数结果为{count}{unit}，"
+                        f"占{population_count}{unit}的"
+                        f"{self._display_number(share_percent, 2)}%。"
+                    ),
+                )
+            return (
+                ["count", "unit"],
+                [[count, unit]],
+                f"计数结果为{count}{unit}。",
+            )
         if value.kind == "assessment":
             data = value.data
             metric_value = self._json_number(data.get("metric_value"), digits)
@@ -1188,35 +1466,371 @@ class DeterministicQueryPlanExecutor:
         digits: int,
     ) -> tuple[list[str], list[list[JsonScalar]], str | None]:
         items: list[ExecutionValue] = value.data.get("items", [])
-        record_item = next((item for item in items if item.kind == "records"), None)
-        count_item = next((item for item in items if item.kind == "count"), None)
-        if record_item is not None:
-            columns, rows, record_summary = self._render_records(
-                self._records(record_item), digits
-            )
-            if count_item is not None:
-                count = int(count_item.data.get("count", 0))
-                return columns, rows, f"共{count}条结果。{record_summary or ''}"
-            return columns, rows, record_summary
-
         labels = output_plan.get("result_fields")
         labels = labels if isinstance(labels, list) else []
+
+        comparison_items = [
+            (index, item)
+            for index, item in enumerate(items)
+            if item.kind == "scalar"
+            and item.data.get("operation") in {
+                "difference",
+                "absolute_difference",
+            }
+            and isinstance(item.data.get("left_record"), dict)
+            and isinstance(item.data.get("right_record"), dict)
+        ]
+        if comparison_items and len(comparison_items) == len(items):
+            return self._render_comparison_composite(
+                comparison_items,
+                labels,
+                digits,
+            )
+
+        trend_series = [
+            item.data.get("series")
+            for item in items
+            if item.kind == "trend"
+            and isinstance(item.data.get("series"), list)
+        ]
+        effective_items: list[tuple[int, ExecutionValue]] = []
+        for index, item in enumerate(items):
+            if item.kind == "records" and any(
+                item.data == series for series in trend_series
+            ):
+                continue
+            effective_items.append((index, item))
+
+        record_like_items = [
+            (index, item)
+            for index, item in effective_items
+            if item.kind in {"records", "trend"}
+        ]
+        count_items = [
+            (index, item)
+            for index, item in effective_items
+            if item.kind == "count"
+        ]
+
+        if len(record_like_items) == 1 and all(
+            item.kind in {"records", "trend", "count"}
+            for _, item in effective_items
+        ):
+            _, record_item = record_like_items[0]
+            if record_item.kind == "trend":
+                columns, rows, record_summary = self._render(
+                    record_item,
+                    output_plan,
+                )
+            else:
+                columns, rows, record_summary = self._render_records(
+                    self._records(record_item),
+                    digits,
+                )
+            if count_items:
+                _, count_item = count_items[0]
+                count = int(count_item.data.get("count", 0))
+                unit = count_item.unit or "条"
+                return (
+                    columns,
+                    rows,
+                    f"满足条件的数量为{count}{unit}。{record_summary or ''}",
+                )
+            return columns, rows, record_summary
+
+        scalar_items = [
+            (index, item)
+            for index, item in effective_items
+            if item.kind == "scalar"
+        ]
+
+        simple_numeric_items = bool(effective_items) and all(
+            item.kind == "scalar"
+            or (
+                item.kind == "records"
+                and len(self._records(item)) == 1
+                and self._records(item)[0].get("rank") is None
+                and self._records(item)[0].get("result_type") is None
+                and self._records(item)[0].get("trend") is None
+            )
+            for _, item in effective_items
+        )
+        if simple_numeric_items and len(effective_items) >= 2:
+            rows: list[list[JsonScalar]] = []
+            summary_parts: list[str] = []
+            for index, item in effective_items:
+                provided_label = (
+                    str(labels[index])
+                    if index < len(labels)
+                    else None
+                )
+                raw_label = self._composite_label(
+                    item,
+                    provided_label,
+                    index,
+                )
+                if item.kind == "records":
+                    record = self._records(item)[0]
+                    metric_name = str(
+                        record.get("metric_name")
+                        or raw_label
+                    )
+                    numeric = self._decimal(
+                        record.get("value"),
+                        "composite record",
+                    )
+                    unit = str(record.get("unit") or item.unit or "")
+                    friendly_label = self._friendly_result_label(
+                        raw_label,
+                        metric_name,
+                    )
+                else:
+                    metric_name = raw_label
+                    numeric = self._decimal(
+                        item.data.get("value"),
+                        "composite scalar",
+                    )
+                    unit = str(item.unit or "")
+                    friendly_label = self._friendly_result_label(
+                        raw_label,
+                        None,
+                    )
+
+                rows.append(
+                    [
+                        raw_label,
+                        friendly_label,
+                        self._json_number(numeric, digits),
+                        unit,
+                    ]
+                )
+                if raw_label in {"mom_change", "yoy_change"}:
+                    if numeric > 0:
+                        direction = "增长"
+                    elif numeric < 0:
+                        direction = "下降"
+                    else:
+                        direction = "保持不变"
+                    summary_parts.append(
+                        f"{friendly_label}{direction}"
+                        + (
+                            ""
+                            if numeric == 0
+                            else self._display_number(
+                                abs(numeric),
+                                digits,
+                            )
+                            + unit
+                        )
+                    )
+                else:
+                    summary_parts.append(
+                        f"{friendly_label}为"
+                        f"{self._display_number(numeric, digits)}"
+                        f"{unit}"
+                    )
+            return (
+                ["result", "label", "value", "unit"],
+                rows,
+                "；".join(summary_parts) + "。",
+            )
+
+        if (
+            len(record_like_items) == 1
+            and scalar_items
+            and all(
+                item.kind in {"records", "scalar"}
+                for _, item in effective_items
+            )
+        ):
+            record_index, record_item = record_like_items[0]
+            records = self._records(record_item)
+            if len(records) == 1:
+                rows: list[list[JsonScalar]] = []
+                summary_parts: list[str] = []
+                for index, item in effective_items:
+                    provided_label = (
+                        str(labels[index])
+                        if index < len(labels)
+                        else None
+                    )
+                    label = self._composite_label(
+                        item,
+                        provided_label,
+                        index,
+                    )
+                    friendly_label = {
+                        "current_value": "当前值",
+                        "mom_change": "环比",
+                        "yoy_change": "同比",
+                    }.get(label, label)
+                    if item.kind == "records":
+                        record = self._records(item)[0]
+                        value_number = self._json_number(
+                            record.get("value"),
+                            digits,
+                        )
+                        unit = str(record.get("unit") or item.unit or "")
+                        rows.append([label, value_number, unit])
+                        summary_parts.append(
+                            f"{friendly_label}为"
+                            f"{self._display_number(record.get('value'), digits)}"
+                            f"{unit}"
+                        )
+                    else:
+                        numeric = self._decimal(
+                            item.data.get("value"),
+                            "composite scalar",
+                        )
+                        value_number = self._json_number(numeric, digits)
+                        unit = item.unit or ""
+                        rows.append([label, value_number, unit])
+                        if label in {"mom_change", "yoy_change"}:
+                            if numeric > 0:
+                                direction = "增长"
+                            elif numeric < 0:
+                                direction = "下降"
+                            else:
+                                direction = "保持不变"
+                            summary_parts.append(
+                                f"{friendly_label}{direction}"
+                                + (
+                                    ""
+                                    if numeric == 0
+                                    else self._display_number(
+                                        abs(numeric),
+                                        digits,
+                                    )
+                                    + unit
+                                )
+                            )
+                        else:
+                            summary_parts.append(
+                                f"{friendly_label}为"
+                                f"{self._display_number(numeric, digits)}"
+                                f"{unit}"
+                            )
+                return (
+                    ["result", "value", "unit"],
+                    rows,
+                    "；".join(summary_parts) + "。",
+                )
+
+        if record_like_items:
+            rendered_groups: list[
+                tuple[str, list[str], list[list[JsonScalar]], str | None]
+            ] = []
+            union_columns: list[str] = []
+            summary_parts: list[str] = []
+
+            for index, item in record_like_items:
+                provided_label = (
+                    str(labels[index])
+                    if index < len(labels)
+                    else None
+                )
+                label = self._composite_label(
+                    item,
+                    provided_label,
+                    index,
+                )
+                if item.kind == "trend":
+                    columns, rows, summary = self._render(
+                        item,
+                        output_plan,
+                    )
+                else:
+                    columns, rows, summary = self._render_records(
+                        self._records(item),
+                        digits,
+                    )
+                for column in columns:
+                    if column not in union_columns:
+                        union_columns.append(column)
+                rendered_groups.append(
+                    (label, columns, rows, summary)
+                )
+                if summary:
+                    cleaned_summary = summary.rstrip("。；")
+                    if cleaned_summary.startswith(label):
+                        summary_parts.append(cleaned_summary)
+                    else:
+                        summary_parts.append(
+                            f"{label}：{cleaned_summary}"
+                        )
+
+            composite_rows: list[list[JsonScalar]] = []
+            for label, columns, rows, _ in rendered_groups:
+                for row in rows:
+                    row_map = dict(zip(columns, row))
+                    composite_rows.append(
+                        [
+                            label,
+                            *[
+                                row_map.get(column)
+                                for column in union_columns
+                            ],
+                        ]
+                    )
+
+            for index, item in count_items:
+                provided_label = (
+                    str(labels[index])
+                    if index < len(labels)
+                    else None
+                )
+                label = self._composite_label(
+                    item,
+                    provided_label,
+                    index,
+                )
+                count = int(item.data.get("count", 0))
+                unit = item.unit or "条"
+                summary_parts.append(f"{label}为{count}{unit}")
+
+            summary = (
+                "；".join(summary_parts) + "。"
+                if summary_parts
+                else None
+            )
+            return (
+                ["result", *union_columns],
+                composite_rows,
+                summary,
+            )
+
         rows: list[list[JsonScalar]] = []
         summary_parts: list[str] = []
-        for index, item in enumerate(items):
-            label = str(labels[index]) if index < len(labels) else f"result_{index + 1}"
+        for index, item in effective_items:
+            provided_label = (
+                str(labels[index])
+                if index < len(labels)
+                else None
+            )
+            label = self._composite_label(
+                item,
+                provided_label,
+                index,
+            )
             if item.kind == "scalar":
-                rendered = self._json_number(item.data.get("value"), digits)
+                rendered = self._json_number(
+                    item.data.get("value"),
+                    digits,
+                )
                 rows.append([label, rendered, item.unit])
-                summary_parts.append(f"{label}为{rendered}{item.unit or ''}")
+                summary_parts.append(
+                    f"{label}为{self._display_number(item.data.get('value'), digits)}"
+                    f"{item.unit or ''}"
+                )
             elif item.kind == "date":
                 rendered = item.data.get("date")
                 rows.append([label, rendered, None])
                 summary_parts.append(f"{label}为{rendered}")
             elif item.kind == "count":
                 rendered = int(item.data.get("count", 0))
-                rows.append([label, rendered, None])
-                summary_parts.append(f"{label}为{rendered}")
+                unit = item.unit or "条"
+                rows.append([label, rendered, unit])
+                summary_parts.append(f"{label}为{rendered}{unit}")
             else:
                 rendered = json.dumps(
                     self._jsonable(item.data, digits),
@@ -1225,7 +1839,158 @@ class DeterministicQueryPlanExecutor:
                 )
                 rows.append([label, rendered, item.unit])
                 summary_parts.append(f"{label}已生成")
-        return ["result", "value", "unit"], rows, "；".join(summary_parts) + "。"
+        return (
+            ["result", "value", "unit"],
+            rows,
+            "；".join(summary_parts) + "。",
+        )
+
+    def _render_comparison_composite(
+        self,
+        comparison_items: list[tuple[int, ExecutionValue]],
+        labels: list[Any],
+        digits: int,
+    ) -> tuple[list[str], list[list[JsonScalar]], str | None]:
+        columns = [
+            "result",
+            "metric_name",
+            "base_date",
+            "base_value",
+            "current_date",
+            "current_value",
+            "change",
+            "direction",
+            "unit",
+        ]
+        rows: list[list[JsonScalar]] = []
+        summaries: list[str] = []
+
+        for index, item in comparison_items:
+            left_record = item.data["left_record"]
+            right_record = item.data["right_record"]
+            current_value = item.data.get("left_value")
+            base_value = item.data.get("right_value")
+            change = item.data.get("value")
+            unit = item.unit or left_record.get("unit") or right_record.get("unit")
+            metric_name = (
+                left_record.get("metric_name")
+                or right_record.get("metric_name")
+                or (
+                    str(labels[index])
+                    if index < len(labels)
+                    else f"result_{index + 1}"
+                )
+            )
+            direction = self._change_direction(change)
+            label = (
+                str(labels[index])
+                if index < len(labels)
+                else str(metric_name)
+            )
+            rows.append(
+                [
+                    label,
+                    metric_name,
+                    right_record.get("date"),
+                    self._json_number(base_value, digits),
+                    left_record.get("date"),
+                    self._json_number(current_value, digits),
+                    self._json_number(change, digits),
+                    direction,
+                    unit,
+                ]
+            )
+            summaries.append(
+                f"{metric_name}："
+                f"{self._display_number(base_value, digits)}{unit or ''}"
+                f"→{self._display_number(current_value, digits)}{unit or ''}，"
+                f"{direction}"
+                + (
+                    ""
+                    if direction == "保持不变"
+                    else f"{self._display_number(abs(self._decimal(change, 'change')), digits)}"
+                    f"{unit or ''}"
+                )
+            )
+
+        return columns, rows, "；".join(summaries) + "。"
+
+    @staticmethod
+    def _change_direction(value: object) -> str:
+        numeric = Decimal(str(value))
+        if numeric > 0:
+            return "增加"
+        if numeric < 0:
+            return "减少"
+        return "保持不变"
+
+    @staticmethod
+    def _friendly_result_label(
+        raw_label: str,
+        metric_name: str | None,
+    ) -> str:
+        mapping = {
+            "current_value": "当前值",
+            "mom_change": "环比",
+            "yoy_change": "同比",
+            "corp_customers": "对公客户数",
+            "corporate_customers": "对公客户数",
+            "personal_customers": "个人客户数",
+            "total_customers": "合计客户数",
+            "corporate_loan_ratio": "对公贷款占比",
+            "duigong_loan_ratio": "对公贷款占比",
+            "personal_loan_ratio": "个人贷款占比",
+            "geren_loan_ratio": "个人贷款占比",
+            "npl_rate": "不良贷款率",
+            "provision_coverage": "拨备覆盖率",
+        }
+        if raw_label in mapping:
+            return mapping[raw_label]
+        if metric_name:
+            return metric_name
+        return raw_label
+
+    @staticmethod
+    def _composite_label(
+        item: ExecutionValue,
+        provided_label: str | None,
+        index: int,
+    ) -> str:
+        generic_labels = {
+            None,
+            "",
+            "date",
+            "value",
+            "trend",
+            "institution",
+            "metric_value",
+            "result",
+        }
+        result_type = item.metadata.get("result_type")
+        if result_type is None and item.kind == "records" and item.data:
+            result_type = item.data[0].get("result_type")
+        if result_type == "maximum":
+            return "最高值"
+        if result_type == "minimum":
+            return "最低值"
+        if item.kind == "trend":
+            return "时间序列与趋势"
+        if item.kind == "count":
+            return "数量"
+        if provided_label not in generic_labels:
+            return str(provided_label)
+        if item.kind == "records":
+            return "明细"
+        return f"结果{index + 1}"
+
+    @staticmethod
+    def _display_number(value: object, digits: int) -> str:
+        numeric = Decimal(str(value))
+        quantizer = Decimal(1).scaleb(-digits)
+        return format(
+            numeric.quantize(quantizer, rounding=ROUND_HALF_UP),
+            f".{digits}f",
+        )
 
     def _render_records(
         self,
@@ -1233,6 +1998,7 @@ class DeterministicQueryPlanExecutor:
         digits: int,
     ) -> tuple[list[str], list[list[JsonScalar]], str | None]:
         fields = [
+            ("result_type", "result_type"),
             ("institution_id", "institution_id"),
             ("institution_name", "institution_name"),
             ("date", "date"),
@@ -1267,11 +2033,25 @@ class DeterministicQueryPlanExecutor:
         for record in records[:20]:
             name = record.get("institution_name") or record.get("institution_id") or ""
             data_date = record.get("date") or ""
-            value = self._json_number(record.get("value"), digits)
+            display_value = self._display_number(
+                record.get("value"),
+                digits,
+            )
             unit = record.get("unit") or ""
             rank = f"，第{record['rank']}名" if record.get("rank") is not None else ""
             prefix = "".join(part for part in (str(name), str(data_date)) if part)
-            summary_parts.append(f"{prefix}：{value}{unit}{rank}")
+            result_type = record.get("result_type")
+            role = (
+                "最高值"
+                if result_type == "maximum"
+                else "最低值"
+                if result_type == "minimum"
+                else ""
+            )
+            role_prefix = f"{role}：" if role else ""
+            summary_parts.append(
+                f"{role_prefix}{prefix}：{display_value}{unit}{rank}"
+            )
         summary = "；".join(summary_parts) + "。"
         if len(records) > 20:
             summary += f"共{len(records)}条记录，摘要仅展示前20条。"

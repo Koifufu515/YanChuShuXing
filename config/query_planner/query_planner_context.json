@@ -297,8 +297,8 @@
     },
     {
       "operator_id": "OP006",
-      "name": "比例",
-      "definition": "分子÷分母×100%。"
+      "name": "除法与比例",
+      "definition": "按分子÷分母执行确定性除法；百分比使用multiplier=100、result_unit=%，普通商值使用multiplier=1并填写实际结果单位。"
     },
     {
       "operator_id": "OP007",
@@ -313,7 +313,7 @@
     {
       "operator_id": "OP009",
       "name": "期间日均",
-      "definition": "指定期间每日有效记录的算术平均。"
+      "definition": "对一个或多个期间记录集合按机构和指标计算算术平均。"
     },
     {
       "operator_id": "OP010",
@@ -323,12 +323,12 @@
     {
       "operator_id": "OP011",
       "name": "数值排序",
-      "definition": "按数值升序或降序，不包含好坏评价。"
+      "definition": "合并一个或多个同单位记录集合后按数值升序或降序，不包含好坏评价。"
     },
     {
       "operator_id": "OP012",
       "name": "绩效排名",
-      "definition": "成本收入比、不良贷款率、逾期贷款率越低越好，其余暂按越高越好。"
+      "definition": "合并一个或多个同指标记录集合后进行绩效排名；成本收入比、不良贷款率、逾期贷款率越低越好，其余暂按越高越好。"
     },
     {
       "operator_id": "OP013",
@@ -338,7 +338,7 @@
     {
       "operator_id": "OP014",
       "name": "极值",
-      "definition": "求最大值或最小值，并返回对应机构与日期。"
+      "definition": "接收一个记录序列，parameters.type只能为max或min，返回极值及对应机构、日期；同时求最大值和最小值时分别调用两次。"
     },
     {
       "operator_id": "OP015",
@@ -348,7 +348,7 @@
     {
       "operator_id": "OP016",
       "name": "条件筛选",
-      "definition": "保留满足条件的机构或日期记录。"
+      "definition": "接收一个记录集合，按comparison_operator、threshold和unit筛选。与动态基准比较时，先用OP003计算目标值减基准值，再以0为阈值筛选。"
     },
     {
       "operator_id": "OP017",
@@ -358,22 +358,22 @@
     {
       "operator_id": "OP018",
       "name": "趋势分析",
-      "definition": "按时间顺序识别上升、下降、波动和转折。"
+      "definition": "接收一个按时间排列的记录序列，识别持续上升、持续下降、先升后降、先降后升或存在波动，并保留原始序列。"
     },
     {
       "operator_id": "OP019",
       "name": "多结果合并",
-      "definition": "组合多个相对独立的查询或分析结果。"
+      "definition": "组合多个相对独立结果；环比和同比组合时同时保留本期原始值、环比结果和同比结果。"
     },
     {
       "operator_id": "OP020",
       "name": "单位换算",
-      "definition": "计算前统一单位。"
+      "definition": "计算前统一基础单位，例如亿元与万元；不得直接生成万元/网点等复合单位。"
     },
     {
       "operator_id": "OP021",
       "name": "基期定位",
-      "definition": "定位上月末、上季末、去年同期或上一年末。"
+      "definition": "定位上月末、上季末、去年同期或上一年末；input_refs必须为空数组。"
     }
   ],
   "business_concepts": [
@@ -477,7 +477,7 @@
     {
       "rule_id": "LR005",
       "expression": "变化多少／变动多少／增加多少／减少多少",
-      "interpretation": "默认绝对变化，不等同于增幅。"
+      "interpretation": "默认绝对变化，调用OP003；即使同时出现“同比”“较去年同期”“环比”“较上季”，只要问法是“变动了多少／变化了多少”且未明确要求增幅、增长率或变化率，仍返回绝对差额。"
     },
     {
       "rule_id": "LR006",
@@ -507,7 +507,7 @@
     {
       "rule_id": "LR011",
       "expression": "日均／全年均值／季度均值",
-      "interpretation": "调用OP009并检查日期完整性。"
+      "interpretation": "调用OP009并检查日期完整性；“日均存款余额”是派生结果，requested_metric_ids可写ZB031，但source_metric_ids必须使用ZB001，OP001读取每日各项存款余额后交给OP009，不得直接从metric_facts读取ZB031。"
     },
     {
       "rule_id": "LR012",
@@ -536,13 +536,13 @@
     },
     {
       "rule_id": "LR017",
-      "expression": "存款／存款总额",
-      "interpretation": "映射ZB001。"
+      "expression": "存款／存款总额／存款规模",
+      "interpretation": "映射ZB001；“存款规模”是各项存款余额的明确别名，不属于待确认的宽泛概念BC004。"
     },
     {
       "rule_id": "LR018",
-      "expression": "贷款／贷款总额",
-      "interpretation": "映射ZB002。"
+      "expression": "贷款／贷款总额／贷款规模",
+      "interpretation": "映射ZB002；“贷款规模”是各项贷款余额的明确别名，不属于待确认的宽泛概念BC004。"
     },
     {
       "rule_id": "LR019",
@@ -572,7 +572,12 @@
     {
       "rule_id": "LR024",
       "expression": "主要经营指标／规模／资产质量／盈利能力／收入结构",
-      "interpretation": "查询业务概念字典；待确认时不得自行扩展。"
+      "interpretation": "只有在这些词被单独作为宽泛分析维度、需要自动展开一组指标时才查询业务概念字典并按待确认状态处理；正式指标全名及明确别名（如存款规模、贷款规模、网点平均存款规模）优先映射指标，不得因包含“规模”子串而误判。"
+    },
+    {
+      "rule_id": "LR025",
+      "expression": "不良贷款率和拨备覆盖率分别是多少／多个正式指标分别是多少",
+      "interpretation": "题目直接询问正式基础指标当前值时，分别用OP001读取题目指定指标并由OP019合并；不得用分子分母重新计算已存储指标，source_metric_ids必须与OP001实际读取指标完全一致。"
     }
   ]
 }
