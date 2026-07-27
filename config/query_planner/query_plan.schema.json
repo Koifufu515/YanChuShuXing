@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://yanchushuxing.local/schemas/query-plan-v1.3.json",
-  "title": "言出数行标准查询计划 v1.3",
-  "description": "银行智能问数查询计划结构约束。v1.3统一OP001机构、指标输入契约，并禁止检查参数使用单数metric_id。",
+  "$id": "https://yanchushuxing.local/schemas/query-plan-v1.4.json",
+  "title": "言出数行标准查询计划 v1.4",
+  "description": "银行智能问数查询计划结构约束。统一多记录排序、跨期对齐、动态全省均值比较和普通除法契约。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -466,6 +466,14 @@
                     },
                     "denominator": {
                       "type": "string"
+                    },
+                    "multiplier": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "result_unit": {
+                      "type": "string",
+                      "minLength": 1
                     }
                   }
                 }
@@ -518,6 +526,9 @@
                       ]
                     }
                   }
+                },
+                "input_refs": {
+                  "minItems": 1
                 }
               }
             }
@@ -553,6 +564,9 @@
                       ]
                     }
                   }
+                },
+                "input_refs": {
+                  "minItems": 1
                 }
               }
             }
@@ -771,6 +785,63 @@
                       "format": "date"
                     }
                   }
+                },
+                "input_refs": {
+                  "maxItems": 0
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP014"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 1,
+                  "maxItems": 1
+                },
+                "parameters": {
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "max",
+                        "min"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP018"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 1,
+                  "maxItems": 1
                 }
               }
             }
