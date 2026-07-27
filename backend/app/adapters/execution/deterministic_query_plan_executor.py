@@ -1205,16 +1205,21 @@ class DeterministicQueryPlanExecutor:
         digits: int,
     ) -> tuple[list[str], list[list[JsonScalar]], str | None]:
         items: list[ExecutionValue] = value.data.get("items", [])
-        record_item = next((item for item in items if item.kind == "records"), None)
+        record_items = [item for item in items if item.kind == "records"]
         count_item = next((item for item in items if item.kind == "count"), None)
-        if record_item is not None:
+        if len(record_items) == 1:
             columns, rows, record_summary = self._render_records(
-                self._records(record_item), digits
+                self._records(record_items[0]), digits
             )
             if count_item is not None:
                 count = int(count_item.data.get("count", 0))
                 return columns, rows, f"共{count}条结果。{record_summary or ''}"
             return columns, rows, record_summary
+        if len(record_items) > 1:
+            combined_records: list[dict[str, Any]] = []
+            for item in record_items:
+                combined_records.extend(dict(record) for record in self._records(item))
+            return self._render_records(combined_records, digits)
 
         labels = output_plan.get("result_fields")
         labels = labels if isinstance(labels, list) else []

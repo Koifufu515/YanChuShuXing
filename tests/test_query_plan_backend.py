@@ -1,6 +1,7 @@
 import json
 import unittest
 from dataclasses import replace
+from pathlib import Path
 
 from app.adapters.execution.deterministic_query_plan_executor import (
     DeterministicQueryPlanExecutor,
@@ -16,6 +17,7 @@ from app.application.models import (
     QueryResult,
 )
 from app.application.planned_pipeline import PlannedQueryPipeline
+from app.application.query_plan_validation import validate_business_rules
 
 
 class FakeDatabaseExecutor:
@@ -415,6 +417,248 @@ class DeterministicExecutorTest(unittest.TestCase):
 
         self.assertEqual(len(result.rows), 2)
         self.assertIn("共2条结果", result.summary)
+
+    def test_batch_dates_feed_trend_as_one_record_collection(self):
+        data = {
+            ("ORG001", "ZB001", "2025-03-31"): (
+                "江苏省A市农商行", "各项存款余额", "亿元", 4196, 2
+            ),
+            ("ORG001", "ZB001", "2025-06-30"): (
+                "江苏省A市农商行", "各项存款余额", "亿元", 4178, 2
+            ),
+            ("ORG001", "ZB001", "2025-09-30"): (
+                "江苏省A市农商行", "各项存款余额", "亿元", 4135, 2
+            ),
+        }
+        executor = DeterministicQueryPlanExecutor(FakeDatabaseExecutor(data))
+        plan = base_plan(
+            operations=[
+                {
+                    "step": 1,
+                    "operator_id": "OP001",
+                    "input_refs": ["ZB001"],
+                    "output_ref": "quarter_values",
+                    "parameters": {
+                        "institution_id": "ORG001",
+                        "dates": ["2025-03-31", "2025-06-30", "2025-09-30"],
+                    },
+                },
+                {
+                    "step": 2,
+                    "operator_id": "OP018",
+                    "input_refs": ["quarter_values"],
+                    "output_ref": "trend",
+                    "parameters": {},
+                },
+            ],
+            checks=[],
+            output={
+                "answer_type": "trend",
+                "result_fields": ["date", "metric_value", "trend"],
+                "unit": "亿元",
+                "rounding": {"mode": "final_only", "digits": 2},
+                "tie_policy": None,
+            },
+        )
+
+        result = executor.execute(plan)
+
+        self.assertEqual(len(result.rows), 3)
+        self.assertIn("trend", result.columns)
+
+    def test_merge_preserves_multiple_record_result_groups(self):
+        data = {
+            ("ORG001", "ZB001", "2025-12-31"): (
+                "江苏省A市农商行", "各项存款余额", "亿元", 10000, 2
+            ),
+            ("ORG002", "ZB001", "2025-12-31"): (
+                "江苏省B市农商行", "各项存款余额", "亿元", 9000, 2
+            ),
+            ("ORG001", "ZB013", "2025-12-31"): (
+                "江苏省A市农商行", "不良贷款率", "%", 120, 2
+            ),
+            ("ORG002", "ZB013", "2025-12-31"): (
+                "江苏省B市农商行", "不良贷款率", "%", 80, 2
+            ),
+        }
+        executor = DeterministicQueryPlanExecutor(FakeDatabaseExecutor(data))
+        ids = ["ORG001", "ORG002"]
+        plan = base_plan(
+            operations=[
+                {
+                    "step": 1,
+                    "operator_id": "OP001",
+                    "input_refs": ["ZB001"],
+                    "output_ref": "deposit_values",
+                    "parameters": {"institution_ids": ids, "date": "2025-12-31"},
+                },
+                {
+                    "step": 2,
+                    "operator_id": "OP012",
+                    "input_refs": ["deposit_values"],
+                    "output_ref": "deposit_rank",
+                    "parameters": {
+                        "metric_id": "ZB001",
+                        "performance_direction": "higher_is_better",
+                    },
+                },
+                {
+                    "step": 3,
+                    "operator_id": "OP001",
+                    "input_refs": ["ZB013"],
+                    "output_ref": "npl_values",
+                    "parameters": {"institution_ids": ids, "date": "2025-12-31"},
+                },
+                {
+                    "step": 4,
+                    "operator_id": "OP012",
+                    "input_refs": ["npl_values"],
+                    "output_ref": "npl_rank",
+                    "parameters": {
+                        "metric_id": "ZB013",
+                        "performance_direction": "lower_is_better",
+                    },
+                },
+                {
+                    "step": 5,
+                    "operator_id": "OP019",
+                    "input_refs": ["deposit_rank", "npl_rank"],
+                    "output_ref": "combined",
+                    "parameters": {},
+                },
+            ],
+            checks=[],
+            output={
+                "answer_type": "composite",
+                "result_fields": ["institution_id", "metric_id", "value", "rank"],
+                "unit": None,
+                "rounding": {"mode": "final_only", "digits": 2},
+                "tie_policy": None,
+            },
+        )
+        plan["metrics"] = {
+            "requested_metric_ids": ["ZB001", "ZB013"],
+            "source_metric_ids": ["ZB001", "ZB013"],
+            "concept_ids": [],
+        }
+
+        result = executor.execute(plan)
+
+        metric_index = result.columns.index("metric_id")
+        self.assertEqual(len(result.rows), 4)
+        self.assertEqual(
+            {row[metric_index] for row in result.rows},
+            {"ZB001", "ZB013"},
+        )
+
+
+class QueryPlanContractValidationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.context = json.loads(
+            Path("config/query_planner/query_planner_context.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_record_set_operators_reject_multiple_input_refs(self):
+        for operator_id in ("OP012", "OP014", "OP018"):
+            with self.subTest(operator_id=operator_id):
+                plan = base_plan(
+                    operations=[
+                        {
+                            "step": 1,
+                            "operator_id": "OP001",
+                            "input_refs": ["ZB001"],
+                            "output_ref": "first",
+                            "parameters": {
+                                "institution_id": "ORG001",
+                                "date": "2025-03-31",
+                            },
+                        },
+                        {
+                            "step": 2,
+                            "operator_id": "OP001",
+                            "input_refs": ["ZB001"],
+                            "output_ref": "second",
+                            "parameters": {
+                                "institution_id": "ORG001",
+                                "date": "2025-06-30",
+                            },
+                        },
+                        {
+                            "step": 3,
+                            "operator_id": operator_id,
+                            "input_refs": ["first", "second"],
+                            "output_ref": "invalid_result",
+                            "parameters": {
+                                "metric_id": "ZB001",
+                                "performance_direction": "higher_is_better",
+                                "type": "max",
+                            },
+                        },
+                    ],
+                    checks=[],
+                )
+
+                errors = validate_business_rules(plan, self.context, "测试问题")
+
+                self.assertTrue(
+                    any(
+                        error["path"] == "operations.2.input_refs"
+                        and "只能接收一个记录集合" in error["message"]
+                        for error in errors
+                    )
+                )
+
+    def test_composite_output_requires_final_merge(self):
+        plan = base_plan(
+            operations=[
+                {
+                    "step": 1,
+                    "operator_id": "OP001",
+                    "input_refs": ["ZB001"],
+                    "output_ref": "first",
+                    "parameters": {
+                        "institution_id": "ORG001",
+                        "date": "2025-03-31",
+                    },
+                },
+                {
+                    "step": 2,
+                    "operator_id": "OP001",
+                    "input_refs": ["ZB013"],
+                    "output_ref": "second",
+                    "parameters": {
+                        "institution_id": "ORG001",
+                        "date": "2025-03-31",
+                    },
+                },
+            ],
+            checks=[],
+            output={
+                "answer_type": "composite",
+                "result_fields": ["first", "second"],
+                "unit": None,
+                "rounding": {"mode": "final_only", "digits": 2},
+                "tie_policy": None,
+            },
+        )
+        plan["metrics"] = {
+            "requested_metric_ids": ["ZB001", "ZB013"],
+            "source_metric_ids": ["ZB001", "ZB013"],
+            "concept_ids": [],
+        }
+
+        errors = validate_business_rules(plan, self.context, "综合分析")
+
+        self.assertTrue(
+            any(
+                error["path"] == "operations"
+                and "OP019" in error["message"]
+                for error in errors
+            )
+        )
 
 
 class QueryPlannerComponentTest(unittest.TestCase):

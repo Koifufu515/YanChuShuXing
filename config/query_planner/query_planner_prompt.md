@@ -103,16 +103,16 @@ status.code 不是 executable 时，operations 和 checks 必须为空数组。d
 12. OP009用于期间日均，并加入 date_completeness。
 13. OP010用于同日同指标13家正式机构均值，并加入 institution_completeness。
 14. OP011用于纯数值排序，parameters.order只能是 ascending 或 descending，不包含绩效好坏判断。
-15. OP012用于绩效排名。parameters必须包含 metric_id 和 performance_direction；performance_direction只能是 higher_is_better 或 lower_is_better。成本收入比、不良贷款率和逾期贷款率使用 lower_is_better。
+15. OP012用于绩效排名。parameters必须包含 metric_id 和 performance_direction；performance_direction只能是 higher_is_better 或 lower_is_better。成本收入比、不良贷款率和逾期贷款率使用 lower_is_better。OP012的input_refs必须且只能引用一个已经包含全部待排名机构的记录集合；多个机构必须先通过一次OP001的institution_ids批量读取，禁止分别读取后把多个output_ref直接传给OP012。
 16. OP013用于从 OP011 或 OP012 的排序结果中取前N项或后N项。input_refs必须只引用一个 OP011 或 OP012 输出；parameters必须包含整数 n 和 direction，direction只能是 top 或 bottom。必须加入 unrounded_comparison 与 tie_preservation，output.tie_policy必须为 preserve_all。
 17. 纯数值“最高或最低的N家”必须先使用 OP011，再使用 OP013。绩效“最好或最差的N家”必须先使用 OP012，再使用 OP013。
-18. OP014用于求最大值或最小值并返回对应机构或日期。期间极值必须基于完整连续期间，加入 date_completeness 与 unrounded_comparison。
+18. OP014用于求最大值或最小值并返回对应机构或日期。期间极值必须基于完整连续期间，加入 date_completeness 与 unrounded_comparison。OP014的input_refs必须且只能引用一个完整记录集合；离散日期使用一次OP001的dates读取，连续期间使用一次OP001的start_date和end_date读取。
 19. OP015用于与正式阈值比较，并直接返回指标值、阈值、是否达标和差距，不得再把 OP015 的结构化结果交给 OP003。parameters必须包含 comparison_operator、threshold 和 unit，comparison_operator只能是 >、>=、<、<=、=、!=。正式规则为：不良贷款率<5%，拨备覆盖率>=150%，资本充足率>=10.5%。阈值判断必须加入 unrounded_comparison。
 20. OP016用于条件筛选。parameters必须分别填写 comparison_operator、threshold 和 unit，不得把完整条件写入 condition 或 comparison 自然语言字符串。
 21. OP017用于统计 OP016 筛选后的机构、日期或记录数量。
 22. 用户同时要求筛选明细和数量时，必须依次使用 OP016、OP017、OP019，由 OP019 合并明细与计数结果。
-23. OP018用于趋势分析。用户询问“走势”“趋势”“上升下降”“波动”时，不能只返回原始时间序列，必须在读取序列后使用 OP018，并加入 date_completeness 与 unrounded_comparison。
-24. OP019用于合并至少两个相对独立的结果。环比和同比同时出现时，必须用 OP019 合并两个 OP007 结果。
+23. OP018用于趋势分析。用户询问“走势”“趋势”“上升下降”“波动”时，不能只返回原始时间序列，必须在读取序列后使用 OP018，并加入 date_completeness 与 unrounded_comparison。OP018的input_refs必须且只能引用一个完整时间序列；正确写法是一次OP001使用dates或start_date/end_date后将唯一output_ref交给OP018，禁止每个日期分别读取后传入多个input_refs。
+24. OP019用于合并至少两个相对独立的结果。环比和同比同时出现时，必须用 OP019 合并两个 OP007 结果。output.answer_type为composite时，operations的最后一步必须是OP019，并在input_refs中引用全部需要展示的独立子结果；不得依靠“最后一个操作自动代表全部结果”。
 25. OP020用于计算前的单位统一。
 26. OP021用于定位相对基期，parameters必须包含 type 和 reference_date。type只能是 previous_month_end、previous_quarter_end、previous_year_same_period、previous_year_end 或 year_begin_base。
 27. 只能使用正式上下文定义的 OP001—OP021，不得创造新算子，也不得改变算子职责。

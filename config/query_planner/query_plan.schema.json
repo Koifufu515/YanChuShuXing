@@ -395,6 +395,38 @@
             "if": {
               "properties": {
                 "operator_id": {
+                  "enum": [
+                    "OP009",
+                    "OP010",
+                    "OP011",
+                    "OP012",
+                    "OP013",
+                    "OP014",
+                    "OP015",
+                    "OP016",
+                    "OP017",
+                    "OP018",
+                    "OP020"
+                  ]
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
                   "const": "OP001"
                 }
               },

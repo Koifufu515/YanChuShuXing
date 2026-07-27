@@ -9,6 +9,31 @@ from typing import Any
 ValidationError = dict[str, str]
 
 
+SINGLE_INPUT_OPERATOR_IDS = {
+    "OP009",
+    "OP010",
+    "OP011",
+    "OP012",
+    "OP013",
+    "OP014",
+    "OP015",
+    "OP016",
+    "OP017",
+    "OP018",
+    "OP020",
+}
+
+RECORD_OUTPUT_OPERATOR_IDS = {
+    "OP001",
+    "OP011",
+    "OP012",
+    "OP013",
+    "OP014",
+    "OP016",
+    "OP020",
+}
+
+
 def parse_iso_date(
     value: object,
     field_path: str,
@@ -491,6 +516,34 @@ def validate_business_rules(
         raw_parameters = operation.get("parameters")
         parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
 
+        if operator_id in SINGLE_INPUT_OPERATOR_IDS and len(input_refs) != 1:
+            errors.append(
+                {
+                    "path": f"operations.{index}.input_refs",
+                    "message": (
+                        f"{operator_id}只能接收一个记录集合或前序结果；"
+                        "多机构必须由一次OP001.institution_ids批量读取，"
+                        "多日期必须由一次OP001.dates或日期区间批量读取。"
+                    ),
+                }
+            )
+
+        if (
+            operator_id in {"OP012", "OP014", "OP018"}
+            and len(input_refs) == 1
+            and output_to_operator.get(input_refs[0])
+            not in RECORD_OUTPUT_OPERATOR_IDS
+        ):
+            errors.append(
+                {
+                    "path": f"operations.{index}.input_refs.0",
+                    "message": (
+                        f"{operator_id}必须接收记录集合输出，不能接收标量、"
+                        "日期、计数或复合结果。"
+                    ),
+                }
+            )
+
         if operator_id == "OP001":
             if (
                 len(input_refs) != 1
@@ -700,6 +753,23 @@ def validate_business_rules(
                 )
 
     operator_set = set(operator_ids)
+
+    output = plan.get("output")
+    answer_type = output.get("answer_type") if isinstance(output, dict) else None
+    if answer_type == "composite" and (
+        not operation_list
+        or not isinstance(operation_list[-1], dict)
+        or operation_list[-1].get("operator_id") != "OP019"
+    ):
+        errors.append(
+            {
+                "path": "operations",
+                "message": (
+                    "output.answer_type为composite时，最后一个操作必须使用"
+                    "OP019合并全部独立子结果。"
+                ),
+            }
+        )
 
     institutions = plan.get("institutions")
     population = (
