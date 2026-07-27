@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 JsonScalar = str | int | float | bool | None
@@ -60,6 +61,9 @@ class QueryMetadata:
     llm_latency_ms: float | None = None
     semantic: SemanticMetadata | None = None
     fallback: FallbackMetadata = field(default_factory=FallbackMetadata)
+    query_plan: dict[str, Any] | None = None
+    execution_trace: list[dict[str, Any]] = field(default_factory=list)
+    plan_repair_attempted: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,43 @@ class LLMResponse:
     text: str
     model: str
     latency_ms: float
+
+
+@dataclass(frozen=True)
+class QueryPlanValidation:
+    schema_valid: bool
+    schema_errors: list[dict[str, str]]
+    business_valid: bool
+    business_errors: list[dict[str, str]]
+    query_plan: dict[str, Any]
+
+    @property
+    def success(self) -> bool:
+        return self.schema_valid and self.business_valid
+
+
+@dataclass(frozen=True)
+class QueryPlanResult:
+    success: bool
+    question: str
+    model: str
+    latency_ms: float
+    repair_attempted: bool
+    initial_validation: QueryPlanValidation
+    schema_valid: bool
+    schema_errors: list[dict[str, str]]
+    business_valid: bool
+    business_errors: list[dict[str, str]]
+    query_plan: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class QueryPlanExecutionResult:
+    columns: list[str]
+    rows: list[list[JsonScalar]]
+    summary: str | None
+    warnings: list[str] = field(default_factory=list)
+    execution_trace: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
