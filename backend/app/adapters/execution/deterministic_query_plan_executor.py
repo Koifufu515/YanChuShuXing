@@ -621,14 +621,37 @@ class DeterministicQueryPlanExecutor:
                     or item in group[:n]
                 ]
             else:
-                boundary_index = len(group) - n
-                boundary = self._decimal(group[boundary_index].get("value"), "OP013")
-                selected = [
-                    item
+                ranks = [
+                    item.get("rank")
                     for item in group
-                    if item in group[boundary_index:]
-                    or self._decimal(item.get("value"), "OP013") == boundary
                 ]
+                if all(
+                    isinstance(rank, int)
+                    and not isinstance(rank, bool)
+                    for rank in ranks
+                ):
+                    threshold_rank = len(group) - n + 1
+                    selected = [
+                        item
+                        for item in group
+                        if int(item["rank"]) >= threshold_rank
+                    ]
+                else:
+                    boundary_index = len(group) - n
+                    boundary = self._decimal(
+                        group[boundary_index].get("value"),
+                        "OP013",
+                    )
+                    selected = [
+                        item
+                        for item in group
+                        if item in group[boundary_index:]
+                        or self._decimal(
+                            item.get("value"),
+                            "OP013",
+                        )
+                        == boundary
+                    ]
             output.extend(selected)
         return ExecutionValue(kind="records", data=output, unit=inputs[0].unit)
 
@@ -1316,7 +1339,11 @@ class DeterministicQueryPlanExecutor:
             elif check_type == "date_completeness":
                 self._check_date_completeness(query_plan, source_records, parameters)
             elif check_type == "metric_completeness":
-                self._check_metric_completeness(source_records, parameters)
+                self._check_metric_completeness(
+                    query_plan,
+                    source_records,
+                    parameters,
+                )
             elif check_type in {
                 "denominator_nonzero",
                 "unit_consistency",
@@ -1354,8 +1381,13 @@ class DeterministicQueryPlanExecutor:
         records: list[dict[str, Any]],
         parameters: dict[str, Any],
     ) -> None:
-        expected = parameters.get("institution_ids")
-        if not isinstance(expected, list) or not expected:
+        explicit_expected = parameters.get("institution_ids")
+        has_explicit_scope = (
+            isinstance(explicit_expected, list)
+            and bool(explicit_expected)
+        )
+        expected = explicit_expected
+        if not has_explicit_scope:
             institutions = query_plan.get("institutions")
             population = (
                 institutions.get("comparison_population")
@@ -1369,14 +1401,61 @@ class DeterministicQueryPlanExecutor:
             )
         if not isinstance(expected, list) or not expected:
             expected = [f"ORG{index:03d}" for index in range(1, 14)]
-        expected_set = set(expected)
+        expected_set = {
+            item for item in expected if isinstance(item, str)
+        }
+
+        filtered = list(records)
+        metric_ids = parameters.get("metric_ids")
+        if isinstance(metric_ids, list) and metric_ids:
+            filtered = [
+                item
+                for item in filtered
+                if item.get("metric_id") in metric_ids
+            ]
+        data_date = parameters.get("date")
+        if isinstance(data_date, str):
+            filtered = [
+                item for item in filtered
+                if item.get("date") == data_date
+            ]
+        dates = parameters.get("dates")
+        if isinstance(dates, list) and dates:
+            date_set = set(dates)
+            filtered = [
+                item for item in filtered
+                if item.get("date") in date_set
+            ]
+
         grouped: dict[tuple[Any, Any], set[Any]] = defaultdict(set)
-        for record in records:
+        for record in filtered:
             grouped[(record.get("date"), record.get("metric_id"))].add(
                 record.get("institution_id")
             )
-        if not grouped or any(not expected_set.issubset(actual) for actual in grouped.values()):
-            raise QueryExecutionError("institution_completeness 检查失败。")
+
+        groups_to_check = list(grouped.values())
+        if not has_explicit_scope:
+            groups_to_check = [
+                actual
+                for actual in groups_to_check
+                if len(
+                    {
+                        item for item in actual
+                        if item is not None
+                    }
+                ) > 1
+            ]
+
+        if (
+            not groups_to_check
+            or any(
+                not expected_set.issubset(actual)
+                for actual in groups_to_check
+            )
+        ):
+            raise QueryExecutionError(
+                "institution_completeness 检查失败。"
+            )
 
     def _check_date_completeness(
         self,
@@ -1418,26 +1497,69 @@ class DeterministicQueryPlanExecutor:
 
     @staticmethod
     def _check_metric_completeness(
+        query_plan: dict[str, Any],
         records: list[dict[str, Any]],
         parameters: dict[str, Any],
     ) -> None:
         expected = parameters.get("metric_ids")
         if not isinstance(expected, list) or not expected:
-            raise QueryExecutionError("metric_completeness 缺少 metric_ids。")
+            raise QueryExecutionError(
+                "metric_completeness 缺少 metric_ids。"
+            )
         expected_set = set(expected)
-        requested_institutions = parameters.get("institution_ids")
+
+        filtered = list(records)
+        data_date = parameters.get("date")
+        if isinstance(data_date, str):
+            filtered = [
+                item for item in filtered
+                if item.get("date") == data_date
+            ]
+        dates = parameters.get("dates")
+        if isinstance(dates, list) and dates:
+            date_set = set(dates)
+            filtered = [
+                item for item in filtered
+                if item.get("date") in date_set
+            ]
+
         grouped: dict[Any, set[Any]] = defaultdict(set)
-        for record in records:
-            grouped[record.get("institution_id")].add(record.get("metric_id"))
-        if isinstance(requested_institutions, list) and requested_institutions:
-            institutions = requested_institutions
+        for record in filtered:
+            grouped[record.get("institution_id")].add(
+                record.get("metric_id")
+            )
+
+        requested = parameters.get("institution_ids")
+        if isinstance(requested, list) and requested:
+            institutions = requested
         else:
-            institutions = [key for key in grouped if key is not None]
+            institution_plan = query_plan.get("institutions")
+            targets = (
+                institution_plan.get("targets")
+                if isinstance(institution_plan, dict)
+                else []
+            )
+            target_ids = [
+                item.get("institution_id")
+                for item in targets
+                if isinstance(item, dict)
+                and isinstance(item.get("institution_id"), str)
+            ]
+            institutions = (
+                target_ids
+                if target_ids
+                else [key for key in grouped if key is not None]
+            )
+
         if not institutions or any(
-            not expected_set.issubset(grouped.get(institution_id, set()))
+            not expected_set.issubset(
+                grouped.get(institution_id, set())
+            )
             for institution_id in institutions
         ):
-            raise QueryExecutionError("metric_completeness 检查失败。")
+            raise QueryExecutionError(
+                "metric_completeness 检查失败。"
+            )
 
     @staticmethod
     def _date_range(start_raw: str, end_raw: str) -> list[str]:
@@ -1659,6 +1781,24 @@ class DeterministicQueryPlanExecutor:
             ):
                 continue
             effective_items.append((index, item))
+
+        has_nonempty_record_output = any(
+            item.kind == "records"
+            and bool(self._output_records(item, output_plan))
+            for _, item in effective_items
+        )
+        if has_nonempty_record_output:
+            effective_items = [
+                (index, item)
+                for index, item in effective_items
+                if not (
+                    item.kind == "records"
+                    and not self._output_records(
+                        item,
+                        output_plan,
+                    )
+                )
+            ]
 
         record_like_items = [
             (index, item)
@@ -1907,7 +2047,10 @@ class DeterministicQueryPlanExecutor:
                         digits,
                     )
                 for column in columns:
-                    if column not in union_columns:
+                    if (
+                        column != "result"
+                        and column not in union_columns
+                    ):
                         union_columns.append(column)
                 rendered_groups.append(
                     (label, columns, rows, summary)

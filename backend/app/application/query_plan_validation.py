@@ -615,6 +615,7 @@ def validate_business_rules(
 
     output_to_operator: dict[str, str] = {}
     output_to_inputs: dict[str, list[str]] = {}
+    output_to_parameters: dict[str, dict[str, Any]] = {}
     output_to_metric_id: dict[str, str] = {}
     operator_ids: list[str] = []
 
@@ -644,6 +645,8 @@ def validate_business_rules(
                 output_to_metric_id[output_ref] = input_refs[0]
         raw_parameters = operation.get("parameters")
         parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
+        if isinstance(output_ref, str):
+            output_to_parameters[output_ref] = parameters
 
         if operator_id == "OP001":
             if (
@@ -2073,7 +2076,10 @@ def validate_business_rules(
         return result
 
     ranking_outputs: dict[str, list[str]] = {}
-    ratio_outputs: list[str] = []
+    ratio_outputs_by_sources: dict[
+        frozenset[str],
+        list[str],
+    ] = {}
     take_n_operations: list[dict[str, Any]] = []
     change_outputs_by_metric: dict[
         tuple[str, str],
@@ -2108,7 +2114,9 @@ def validate_business_rules(
         if operator_id == "OP011" and input_refs:
             source_metrics: set[str] = set()
             for ref in input_refs:
-                source_metrics.update(source_metrics_for_ref(ref))
+                source_metrics.update(
+                    source_metrics_for_ref(ref)
+                )
             inferred_metric_id = None
             if source_metrics == {"ZB001"}:
                 inferred_metric_id = "ZB001"
@@ -2125,14 +2133,22 @@ def validate_business_rules(
         if operator_id == "OP006":
             source_metrics: set[str] = set()
             for ref in input_refs:
-                source_metrics.update(source_metrics_for_ref(ref))
-            if source_metrics == {"ZB001", "ZB002"}:
-                ratio_outputs.append(output_ref)
+                source_metrics.update(
+                    source_metrics_for_ref(ref)
+                )
+            if source_metrics:
+                ratio_outputs_by_sources.setdefault(
+                    frozenset(source_metrics),
+                    [],
+                ).append(output_ref)
 
         if operator_id == "OP013":
             take_n_operations.append(operation)
 
-        if operator_id in {"OP003", "OP008"} and len(input_refs) == 2:
+        if (
+            operator_id in {"OP003", "OP008"}
+            and len(input_refs) == 2
+        ):
             left_metrics = source_metrics_for_ref(input_refs[0])
             right_metrics = source_metrics_for_ref(input_refs[1])
             if (
@@ -2156,6 +2172,86 @@ def validate_business_rules(
             final_merge_refs = {
                 ref for ref in refs if isinstance(ref, str)
             }
+
+    institutions_for_count = plan.get("institutions")
+    comparison_population = (
+        institutions_for_count.get("comparison_population")
+        if isinstance(institutions_for_count, dict)
+        else None
+    )
+    population_ids = (
+        comparison_population.get("institution_ids")
+        if isinstance(comparison_population, dict)
+        else None
+    )
+    population_count = (
+        len(
+            {
+                item for item in population_ids
+                if isinstance(item, str)
+            }
+        )
+        if isinstance(population_ids, list)
+        else 13
+    )
+    if population_count < 1:
+        population_count = 13
+
+    def output_contains_ref(
+        output_ref: str,
+        required_ref: str,
+        require_full_ranking: bool,
+        visited: set[str] | None = None,
+    ) -> bool:
+        if output_ref == required_ref:
+            return True
+        current_visited = (
+            set() if visited is None else set(visited)
+        )
+        if output_ref in current_visited:
+            return False
+        current_visited.add(output_ref)
+
+        if (
+            require_full_ranking
+            and output_to_operator.get(output_ref) == "OP013"
+        ):
+            n = output_to_parameters.get(
+                output_ref,
+                {},
+            ).get("n")
+            if (
+                isinstance(n, bool)
+                or not isinstance(n, int)
+                or n < population_count
+            ):
+                return False
+
+        return any(
+            output_contains_ref(
+                source_ref,
+                required_ref,
+                require_full_ranking,
+                current_visited,
+            )
+            for source_ref in output_to_inputs.get(
+                output_ref,
+                [],
+            )
+        )
+
+    def final_exposes(
+        required_ref: str,
+        require_full_ranking: bool = False,
+    ) -> bool:
+        return any(
+            output_contains_ref(
+                final_ref,
+                required_ref,
+                require_full_ranking,
+            )
+            for final_ref in final_merge_refs
+        )
 
     if {"BC001", "BC002", "BC003"}.issubset(
         planned_concept_id_set
@@ -2250,7 +2346,11 @@ def validate_business_rules(
                     }
                 )
             elif final_merge_refs and not any(
-                ref in final_merge_refs for ref in refs
+                final_exposes(
+                    ref,
+                    require_full_ranking=True,
+                )
+                for ref in refs
             ):
                 errors.append(
                     {
@@ -2258,11 +2358,28 @@ def validate_business_rules(
                         "message": f"{metric_id}排名未合并进最终结果。",
                     }
                 )
-        if not ratio_outputs:
+        ldr_ratio_outputs = ratio_outputs_by_sources.get(
+            frozenset({"ZB001", "ZB002"}),
+            [],
+        )
+        if not ldr_ratio_outputs:
             errors.append(
                 {
                     "path": "operations",
-                    "message": "规模维度必须用OP006计算13家机构的ZB022存贷比。",
+                    "message": (
+                        "规模维度必须用OP006计算"
+                        "13家机构的ZB022存贷比。"
+                    ),
+                }
+            )
+        elif final_merge_refs and not any(
+            final_exposes(ref)
+            for ref in ldr_ratio_outputs
+        ):
+            errors.append(
+                {
+                    "path": "operations",
+                    "message": "ZB022存贷比未合并进最终结果。",
                 }
             )
 
@@ -2285,12 +2402,49 @@ def validate_business_rules(
                     }
                 )
             elif final_merge_refs and not any(
-                ref in final_merge_refs for ref in refs
+                final_exposes(
+                    ref,
+                    require_full_ranking=True,
+                )
+                for ref in refs
             ):
                 errors.append(
                     {
                         "path": "operations",
                         "message": f"{metric_id}排名未合并进最终结果。",
+                    }
+                )
+
+        ratio_requirements = (
+            (
+                frozenset({"ZB008", "ZB009"}),
+                "净利息收入占营业收入比重",
+            ),
+            (
+                frozenset({"ZB007", "ZB009"}),
+                "中间业务收入占营业收入比重",
+            ),
+        )
+        for source_set, ratio_name in ratio_requirements:
+            refs = ratio_outputs_by_sources.get(
+                source_set,
+                [],
+            )
+            if not refs:
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": f"收入结构缺少{ratio_name}计算。",
+                    }
+                )
+            elif final_merge_refs and not any(
+                final_exposes(ref)
+                for ref in refs
+            ):
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": f"{ratio_name}未合并进最终结果。",
                     }
                 )
 
@@ -2318,12 +2472,16 @@ def validate_business_rules(
                     }
                 )
             elif final_merge_refs and not any(
-                ref in final_merge_refs for ref in refs
+                final_exposes(ref)
+                for ref in refs
             ):
                 errors.append(
                     {
                         "path": "operations",
-                        "message": f"{metric_id}较年初变化未合并进最终结果。",
+                        "message": (
+                            f"{metric_id}较年初变化"
+                            "未合并进最终结果。"
+                        ),
                     }
                 )
 
