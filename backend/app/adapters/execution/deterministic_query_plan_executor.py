@@ -70,6 +70,7 @@ class DeterministicQueryPlanExecutor:
                 context=context,
             )
             result.operator_id = operator_id
+            result.metadata.setdefault("output_ref", output_ref)
             context[output_ref] = result
             trace.append(
                 {
@@ -86,9 +87,26 @@ class DeterministicQueryPlanExecutor:
         self._run_checks(query_plan, context)
         final_ref = operations[-1]["output_ref"]
         final_value = context[final_ref]
+        output_plan = dict(
+            query_plan.get("output")
+            if isinstance(query_plan.get("output"), dict)
+            else {}
+        )
+        institutions = query_plan.get("institutions")
+        targets = (
+            institutions.get("targets")
+            if isinstance(institutions, dict)
+            else []
+        )
+        output_plan["_target_institution_ids"] = [
+            item.get("institution_id")
+            for item in targets
+            if isinstance(item, dict)
+            and isinstance(item.get("institution_id"), str)
+        ]
         columns, rows, summary = self._render(
             final_value,
-            query_plan.get("output") if isinstance(query_plan.get("output"), dict) else {},
+            output_plan,
         )
         return QueryPlanExecutionResult(
             columns=columns,
@@ -361,6 +379,11 @@ class DeterministicQueryPlanExecutor:
             multiplier = self._decimal(multiplier_raw, "OP006.multiplier")
         if multiplier <= 0:
             raise QueryExecutionError("OP006.multiplier 必须大于0。")
+
+        result_metric_id, result_metric_name = self._ratio_metric_metadata(
+            inputs,
+            parameters,
+        )
         return self._binary_transform(
             inputs[0],
             inputs[1],
@@ -372,7 +395,48 @@ class DeterministicQueryPlanExecutor:
             "ratio" if result_unit == "%" else "quotient",
             result_unit=result_unit,
             require_same_unit=False,
+            cross_metric_alignment=True,
+            result_metric_id=result_metric_id,
+            result_metric_name=result_metric_name,
         )
+
+    def _ratio_metric_metadata(
+        self,
+        inputs: list[ExecutionValue],
+        parameters: dict[str, Any],
+    ) -> tuple[str | None, str | None]:
+        explicit_id = parameters.get("result_metric_id")
+        explicit_name = parameters.get("result_metric_name")
+        if isinstance(explicit_id, str) or isinstance(explicit_name, str):
+            return (
+                explicit_id if isinstance(explicit_id, str) else None,
+                explicit_name if isinstance(explicit_name, str) else None,
+            )
+
+        def single_metric_id(value: ExecutionValue) -> str | None:
+            if value.kind != "records":
+                return None
+            ids = {
+                str(item.get("metric_id"))
+                for item in self._records(value)
+                if isinstance(item.get("metric_id"), str)
+            }
+            return next(iter(ids)) if len(ids) == 1 else None
+
+        numerator_id = single_metric_id(inputs[0])
+        denominator_id = single_metric_id(inputs[1])
+        known = {
+            ("ZB002", "ZB001"): ("ZB022", "存贷比"),
+            ("ZB008", "ZB009"): (
+                "ZB034",
+                "净利息收入占营业收入比重",
+            ),
+            ("ZB007", "ZB009"): (
+                None,
+                "中间业务收入占营业收入比重",
+            ),
+        }
+        return known.get((numerator_id, denominator_id), (None, None))
 
     def _op_growth(
         self,
@@ -906,30 +970,56 @@ class DeterministicQueryPlanExecutor:
         result_name: str,
         result_unit: str | None = None,
         require_same_unit: bool = True,
+        cross_metric_alignment: bool = False,
+        result_metric_id: str | None = None,
+        result_metric_name: str | None = None,
     ) -> ExecutionValue:
         if left.kind == "records" and right.kind == "records":
             left_records = self._records(left)
             right_records = self._records(right)
             if len(left_records) == len(right_records) == 1:
-                left_value = self._decimal(left_records[0].get("value"), result_name)
-                right_value = self._decimal(right_records[0].get("value"), result_name)
+                left_record = left_records[0]
+                right_record = right_records[0]
+                left_value = self._decimal(
+                    left_record.get("value"),
+                    result_name,
+                )
+                right_value = self._decimal(
+                    right_record.get("value"),
+                    result_name,
+                )
                 if require_same_unit:
                     self._require_same_unit(
-                        [left_records[0].get("unit"), right_records[0].get("unit")],
+                        [
+                            left_record.get("unit"),
+                            right_record.get("unit"),
+                        ],
                         result_name,
                     )
+                inferred_metric_name = result_metric_name
+                if (
+                    inferred_metric_name is None
+                    and left_record.get("metric_id")
+                    == right_record.get("metric_id")
+                ):
+                    inferred_metric_name = left_record.get("metric_name")
+                metadata = {
+                    "operation": result_name,
+                    "metric_id": result_metric_id,
+                    "metric_name": inferred_metric_name,
+                }
                 return ExecutionValue(
                     kind="scalar",
                     data={
                         "value": function(left_value, right_value),
                         "left_value": left_value,
                         "right_value": right_value,
-                        "left_record": dict(left_records[0]),
-                        "right_record": dict(right_records[0]),
+                        "left_record": dict(left_record),
+                        "right_record": dict(right_record),
                         "operation": result_name,
                     },
-                    unit=result_unit or left_records[0].get("unit"),
-                    metadata={"operation": result_name},
+                    unit=result_unit or left_record.get("unit"),
+                    metadata=metadata,
                 )
             return self._aligned_record_transform(
                 left_records,
@@ -937,6 +1027,9 @@ class DeterministicQueryPlanExecutor:
                 function,
                 result_unit=result_unit,
                 require_same_unit=require_same_unit,
+                cross_metric_alignment=cross_metric_alignment,
+                result_metric_id=result_metric_id,
+                result_metric_name=result_metric_name,
             )
 
         left_value, left_unit = self._single_numeric(left)
@@ -952,7 +1045,11 @@ class DeterministicQueryPlanExecutor:
                 "operation": result_name,
             },
             unit=result_unit or left_unit,
-            metadata={"operation": result_name},
+            metadata={
+                "operation": result_name,
+                "metric_id": result_metric_id,
+                "metric_name": result_metric_name,
+            },
         )
 
     def _aligned_record_transform(
@@ -962,6 +1059,9 @@ class DeterministicQueryPlanExecutor:
         function: Callable[[Decimal, Decimal], Decimal],
         result_unit: str | None,
         require_same_unit: bool,
+        cross_metric_alignment: bool = False,
+        result_metric_id: str | None = None,
+        result_metric_name: str | None = None,
     ) -> ExecutionValue:
         def unique_map(
             records: list[dict[str, Any]],
@@ -994,6 +1094,10 @@ class DeterministicQueryPlanExecutor:
                     "aligned operation",
                 )
                 current = dict(left_record)
+                if result_metric_id is not None:
+                    current["metric_id"] = result_metric_id
+                if result_metric_name is not None:
+                    current["metric_name"] = result_metric_name
                 current["left_value"] = left_value
                 current["right_value"] = right_value
                 current["left_date"] = left_record.get("date")
@@ -1006,6 +1110,10 @@ class DeterministicQueryPlanExecutor:
                 kind="records",
                 data=output,
                 unit=result_unit or left_records[0].get("unit"),
+                metadata={
+                    "metric_id": result_metric_id,
+                    "metric_name": result_metric_name,
+                },
             )
 
         exact_fields = ("institution_id", "date", "metric_id")
@@ -1019,6 +1127,27 @@ class DeterministicQueryPlanExecutor:
             return transform_pairs(
                 [(left_exact[key], right_exact[key]) for key in left_exact]
             )
+
+        if cross_metric_alignment:
+            cross_metric_fields = (
+                ("institution_id", "date"),
+                ("institution_id", "start_date", "end_date"),
+                ("institution_id",),
+            )
+            for fields in cross_metric_fields:
+                left_map = unique_map(left_records, fields)
+                right_map = unique_map(right_records, fields)
+                if (
+                    left_map is not None
+                    and right_map is not None
+                    and set(left_map) == set(right_map)
+                ):
+                    return transform_pairs(
+                        [
+                            (left_map[key], right_map[key])
+                            for key in left_map
+                        ]
+                    )
 
         period_fields = ("institution_id", "metric_id")
         left_period = unique_map(left_records, period_fields)
@@ -1326,6 +1455,31 @@ class DeterministicQueryPlanExecutor:
             current += timedelta(days=1)
         return result
 
+    def _output_records(
+        self,
+        value: ExecutionValue,
+        output_plan: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        records = self._records(value)
+        target_ids = output_plan.get("_target_institution_ids")
+        if not isinstance(target_ids, list) or not target_ids:
+            return records
+        target_set = {
+            item for item in target_ids if isinstance(item, str)
+        }
+        if not target_set:
+            return records
+        if not any(
+            record.get("institution_id") is not None
+            for record in records
+        ):
+            return records
+        return [
+            record
+            for record in records
+            if record.get("institution_id") in target_set
+        ]
+
     def _render(
         self,
         value: ExecutionValue,
@@ -1341,7 +1495,10 @@ class DeterministicQueryPlanExecutor:
             digits = 2
 
         if value.kind == "records":
-            return self._render_records(self._records(value), digits)
+            return self._render_records(
+                self._output_records(value, output_plan),
+                digits,
+            )
         if value.kind == "scalar":
             if (
                 value.data.get("operation")
@@ -1468,6 +1625,8 @@ class DeterministicQueryPlanExecutor:
         items: list[ExecutionValue] = value.data.get("items", [])
         labels = output_plan.get("result_fields")
         labels = labels if isinstance(labels, list) else []
+        if len(labels) != len(items):
+            labels = []
 
         comparison_items = [
             (index, item)
@@ -1524,7 +1683,7 @@ class DeterministicQueryPlanExecutor:
                 )
             else:
                 columns, rows, record_summary = self._render_records(
-                    self._records(record_item),
+                    self._output_records(record_item, output_plan),
                     digits,
                 )
             if count_items:
@@ -1644,7 +1803,10 @@ class DeterministicQueryPlanExecutor:
             )
         ):
             record_index, record_item = record_like_items[0]
-            records = self._records(record_item)
+            records = self._output_records(
+                record_item,
+                output_plan,
+            )
             if len(records) == 1:
                 rows: list[list[JsonScalar]] = []
                 summary_parts: list[str] = []
@@ -1741,7 +1903,7 @@ class DeterministicQueryPlanExecutor:
                     )
                 else:
                     columns, rows, summary = self._render_records(
-                        self._records(item),
+                        self._output_records(item, output_plan),
                         digits,
                     )
                 for column in columns:
@@ -1759,6 +1921,16 @@ class DeterministicQueryPlanExecutor:
                             f"{label}：{cleaned_summary}"
                         )
 
+            if scalar_items:
+                for column in (
+                    "metric_id",
+                    "metric_name",
+                    "metric_value",
+                    "unit",
+                ):
+                    if column not in union_columns:
+                        union_columns.append(column)
+
             composite_rows: list[list[JsonScalar]] = []
             for label, columns, rows, _ in rendered_groups:
                 for row in rows:
@@ -1771,6 +1943,72 @@ class DeterministicQueryPlanExecutor:
                                 for column in union_columns
                             ],
                         ]
+                    )
+
+            for index, item in scalar_items:
+                provided_label = (
+                    str(labels[index])
+                    if index < len(labels)
+                    else None
+                )
+                label = self._composite_label(
+                    item,
+                    provided_label,
+                    index,
+                )
+                numeric = self._decimal(
+                    item.data.get("value"),
+                    "composite scalar",
+                )
+                metric_name = (
+                    item.metadata.get("metric_name")
+                    if isinstance(
+                        item.metadata.get("metric_name"),
+                        str,
+                    )
+                    else label
+                )
+                row_map = {
+                    "metric_id": item.metadata.get("metric_id"),
+                    "metric_name": metric_name,
+                    "metric_value": self._json_number(
+                        numeric,
+                        digits,
+                    ),
+                    "unit": item.unit,
+                }
+                composite_rows.append(
+                    [
+                        label,
+                        *[
+                            row_map.get(column)
+                            for column in union_columns
+                        ],
+                    ]
+                )
+                if item.data.get("operation") in {
+                    "difference",
+                    "absolute_difference",
+                    "percentage_point_change",
+                }:
+                    direction = self._change_direction(numeric)
+                    summary_parts.append(
+                        f"{label}{direction}"
+                        + (
+                            ""
+                            if numeric == 0
+                            else self._display_number(
+                                abs(numeric),
+                                digits,
+                            )
+                            + str(item.unit or "")
+                        )
+                    )
+                else:
+                    summary_parts.append(
+                        f"{label}为"
+                        f"{self._display_number(numeric, digits)}"
+                        f"{item.unit or ''}"
                     )
 
             for index, item in count_items:
@@ -1943,10 +2181,21 @@ class DeterministicQueryPlanExecutor:
             "geren_loan_ratio": "个人贷款占比",
             "npl_rate": "不良贷款率",
             "provision_coverage": "拨备覆盖率",
+            "net_profit_change": "净利润较年初变化",
+            "cost_income_ratio_change": "成本收入比较年初变化",
+            "net_interest_income_change": "净利息收入较年初变化",
+            "intermediate_income_change": "中间业务收入较年初变化",
+            "net_interest_ratio_current": "净利息收入占营业收入比重",
+            "intermediate_income_ratio_current": "中间业务收入占营业收入比重",
+            "intermediate_ratio_current": "中间业务收入占营业收入比重",
+            "ldr": "存贷比",
+            "ldr_value": "存贷比",
         }
         if raw_label in mapping:
             return mapping[raw_label]
         if metric_name:
+            if "change" in raw_label:
+                return f"{metric_name}较基期变化"
             return metric_name
         return raw_label
 
@@ -1977,8 +2226,55 @@ class DeterministicQueryPlanExecutor:
             return "时间序列与趋势"
         if item.kind == "count":
             return "数量"
-        if provided_label not in generic_labels:
-            return str(provided_label)
+
+        output_ref = item.metadata.get("output_ref")
+        candidate = (
+            str(provided_label)
+            if provided_label not in generic_labels
+            else str(output_ref)
+            if isinstance(output_ref, str) and output_ref
+            else ""
+        )
+
+        metric_name = (
+            item.metadata.get("metric_name")
+            if isinstance(item.metadata.get("metric_name"), str)
+            else None
+        )
+        if metric_name is None and item.kind == "records":
+            names = {
+                str(record.get("metric_name"))
+                for record in item.data
+                if isinstance(record, dict)
+                and isinstance(record.get("metric_name"), str)
+            }
+            if len(names) == 1:
+                metric_name = next(iter(names))
+
+        if metric_name:
+            lowered = candidate.lower()
+            if any(token in lowered for token in ("top3", "best")):
+                return f"{metric_name}表现较好"
+            if any(token in lowered for token in ("bottom4", "worst")):
+                return f"{metric_name}表现较差"
+            if "rank" in lowered or "perf" in lowered:
+                return f"{metric_name}排名"
+            if "change" in lowered:
+                return f"{metric_name}较基期变化"
+            return metric_name
+
+        mapping = {
+            "net_profit_change": "净利润较年初变化",
+            "cost_income_ratio_change": "成本收入比较年初变化",
+            "net_interest_income_change": "净利息收入较年初变化",
+            "intermediate_income_change": "中间业务收入较年初变化",
+            "ldr": "存贷比",
+            "ldr_value": "存贷比",
+        }
+        if candidate in mapping:
+            return mapping[candidate]
+        if candidate:
+            return candidate
         if item.kind == "records":
             return "明细"
         return f"结果{index + 1}"

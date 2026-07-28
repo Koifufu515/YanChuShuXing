@@ -615,6 +615,7 @@ def validate_business_rules(
 
     output_to_operator: dict[str, str] = {}
     output_to_inputs: dict[str, list[str]] = {}
+    output_to_metric_id: dict[str, str] = {}
     operator_ids: list[str] = []
 
     for index, operation in enumerate(operation_list):
@@ -634,6 +635,13 @@ def validate_business_rules(
             output_to_inputs[output_ref] = [
                 ref for ref in input_refs if isinstance(ref, str)
             ]
+            if (
+                operator_id == "OP001"
+                and len(input_refs) == 1
+                and isinstance(input_refs[0], str)
+                and re.fullmatch(r"ZB\d{3}", input_refs[0])
+            ):
+                output_to_metric_id[output_ref] = input_refs[0]
         raw_parameters = operation.get("parameters")
         parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
 
@@ -2041,6 +2049,316 @@ def validate_business_rules(
                     {
                         "path": "checks",
                         "message": f"期间极值缺少{check_type}。",
+                    }
+                )
+
+    def source_metrics_for_ref(
+        ref: str,
+        visited: set[str] | None = None,
+    ) -> set[str]:
+        if ref in output_to_metric_id:
+            return {output_to_metric_id[ref]}
+        current_visited = set() if visited is None else set(visited)
+        if ref in current_visited:
+            return set()
+        current_visited.add(ref)
+        result: set[str] = set()
+        for source_ref in output_to_inputs.get(ref, []):
+            result.update(
+                source_metrics_for_ref(
+                    source_ref,
+                    current_visited,
+                )
+            )
+        return result
+
+    ranking_outputs: dict[str, list[str]] = {}
+    ratio_outputs: list[str] = []
+    take_n_operations: list[dict[str, Any]] = []
+    change_outputs_by_metric: dict[
+        tuple[str, str],
+        list[str],
+    ] = {}
+
+    for operation in operation_list:
+        if not isinstance(operation, dict):
+            continue
+        operator_id = operation.get("operator_id")
+        output_ref = operation.get("output_ref")
+        refs = operation.get("input_refs")
+        input_refs = (
+            [ref for ref in refs if isinstance(ref, str)]
+            if isinstance(refs, list)
+            else []
+        )
+        parameters = operation.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+
+        if not isinstance(output_ref, str):
+            continue
+
+        if operator_id == "OP012":
+            metric_id = parameters.get("metric_id")
+            if isinstance(metric_id, str):
+                ranking_outputs.setdefault(
+                    metric_id,
+                    [],
+                ).append(output_ref)
+
+        if operator_id == "OP011" and input_refs:
+            source_metrics: set[str] = set()
+            for ref in input_refs:
+                source_metrics.update(source_metrics_for_ref(ref))
+            inferred_metric_id = None
+            if source_metrics == {"ZB001"}:
+                inferred_metric_id = "ZB001"
+            elif source_metrics == {"ZB002"}:
+                inferred_metric_id = "ZB002"
+            elif source_metrics == {"ZB001", "ZB002"}:
+                inferred_metric_id = "ZB022"
+            if inferred_metric_id:
+                ranking_outputs.setdefault(
+                    inferred_metric_id,
+                    [],
+                ).append(output_ref)
+
+        if operator_id == "OP006":
+            source_metrics: set[str] = set()
+            for ref in input_refs:
+                source_metrics.update(source_metrics_for_ref(ref))
+            if source_metrics == {"ZB001", "ZB002"}:
+                ratio_outputs.append(output_ref)
+
+        if operator_id == "OP013":
+            take_n_operations.append(operation)
+
+        if operator_id in {"OP003", "OP008"} and len(input_refs) == 2:
+            left_metrics = source_metrics_for_ref(input_refs[0])
+            right_metrics = source_metrics_for_ref(input_refs[1])
+            if (
+                len(left_metrics) == 1
+                and left_metrics == right_metrics
+            ):
+                metric_id = next(iter(left_metrics))
+                change_outputs_by_metric.setdefault(
+                    (metric_id, operator_id),
+                    [],
+                ).append(output_ref)
+
+    final_merge_refs: set[str] = set()
+    if (
+        operation_list
+        and isinstance(operation_list[-1], dict)
+        and operation_list[-1].get("operator_id") == "OP019"
+    ):
+        refs = operation_list[-1].get("input_refs")
+        if isinstance(refs, list):
+            final_merge_refs = {
+                ref for ref in refs if isinstance(ref, str)
+            }
+
+    if {"BC001", "BC002", "BC003"}.issubset(
+        planned_concept_id_set
+    ):
+        performance_metrics = {
+            "ZB001",
+            "ZB002",
+            "ZB013",
+            "ZB015",
+            "ZB016",
+            "ZB017",
+            "ZB011",
+            "ZB012",
+        }
+        for metric_id in sorted(performance_metrics):
+            rank_refs = ranking_outputs.get(metric_id, [])
+            if not rank_refs:
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": (
+                            "主要经营指标好坏分类缺少"
+                            f"{metric_id}的绩效排名。"
+                        ),
+                    }
+                )
+                continue
+            for direction, n, label in (
+                ("top", 3, "表现较好"),
+                ("bottom", 4, "表现较差"),
+            ):
+                matches = [
+                    operation
+                    for operation in take_n_operations
+                    if isinstance(
+                        operation.get("parameters"),
+                        dict,
+                    )
+                    and operation["parameters"].get(
+                        "direction"
+                    )
+                    == direction
+                    and operation["parameters"].get("n") == n
+                    and isinstance(
+                        operation.get("input_refs"),
+                        list,
+                    )
+                    and len(operation["input_refs"]) == 1
+                    and operation["input_refs"][0] in rank_refs
+                ]
+                if not matches:
+                    errors.append(
+                        {
+                            "path": "operations",
+                            "message": (
+                                f"{metric_id}{label}分类必须使用"
+                                f"OP013(direction={direction}, n={n})。"
+                            ),
+                        }
+                    )
+
+        if not ranking_outputs.get("ZB022"):
+            errors.append(
+                {
+                    "path": "operations",
+                    "message": "主要经营指标必须计算并返回ZB022存贷比数值排名。",
+                }
+            )
+
+    if (
+        {"BC004", "BC005", "BC006"}.issubset(
+            planned_concept_id_set
+        )
+        and "各项指标及排名" in question
+    ):
+        for metric_id in (
+            "ZB001",
+            "ZB002",
+            "ZB022",
+            "ZB013",
+            "ZB011",
+        ):
+            refs = ranking_outputs.get(metric_id, [])
+            if not refs:
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": (
+                            "规模、资产质量、盈利能力综合分析"
+                            f"缺少{metric_id}排名。"
+                        ),
+                    }
+                )
+            elif final_merge_refs and not any(
+                ref in final_merge_refs for ref in refs
+            ):
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": f"{metric_id}排名未合并进最终结果。",
+                    }
+                )
+        if not ratio_outputs:
+            errors.append(
+                {
+                    "path": "operations",
+                    "message": "规模维度必须用OP006计算13家机构的ZB022存贷比。",
+                }
+            )
+
+    if (
+        {"BC006", "BC007"}.issubset(
+            planned_concept_id_set
+        )
+        and "较年初变化" in question
+    ):
+        for metric_id in ("ZB011", "ZB012", "ZB008", "ZB007"):
+            refs = ranking_outputs.get(metric_id, [])
+            if not refs:
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": (
+                            "盈利能力与收入结构评估"
+                            f"缺少{metric_id}全省排名。"
+                        ),
+                    }
+                )
+            elif final_merge_refs and not any(
+                ref in final_merge_refs for ref in refs
+            ):
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": f"{metric_id}排名未合并进最终结果。",
+                    }
+                )
+
+        required_change_operators = {
+            "ZB011": "OP003",
+            "ZB012": "OP008",
+            "ZB008": "OP003",
+            "ZB007": "OP003",
+        }
+        for metric_id, required_operator in (
+            required_change_operators.items()
+        ):
+            refs = change_outputs_by_metric.get(
+                (metric_id, required_operator),
+                [],
+            )
+            if not refs:
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": (
+                            f"{metric_id}较年初变化必须使用"
+                            f"{required_operator}。"
+                        ),
+                    }
+                )
+            elif final_merge_refs and not any(
+                ref in final_merge_refs for ref in refs
+            ):
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": f"{metric_id}较年初变化未合并进最终结果。",
+                    }
+                )
+
+        for operation in operation_list:
+            if (
+                not isinstance(operation, dict)
+                or operation.get("operator_id")
+                not in {"OP003", "OP008"}
+            ):
+                continue
+            refs = operation.get("input_refs")
+            if not isinstance(refs, list) or len(refs) != 2:
+                continue
+            source_sets = [
+                source_metrics_for_ref(ref)
+                for ref in refs
+                if isinstance(ref, str)
+            ]
+            if len(source_sets) != 2:
+                continue
+            if (
+                source_sets[0] == source_sets[1]
+                and source_sets[0]
+                in (
+                    {"ZB008", "ZB009"},
+                    {"ZB007", "ZB009"},
+                )
+            ):
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": (
+                            "题目要求收入金额较年初变化，"
+                            "不得用收入占比变化替代。"
+                        ),
                     }
                 )
 
