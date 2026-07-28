@@ -1,5 +1,6 @@
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.error_handlers import register_error_handlers
 from app.api.query import router as query_router
@@ -18,10 +19,22 @@ app.include_router(query_router)
 register_error_handlers(app)
 configure_dependencies(app)
 
+CANDIDATE_FRONTEND_ROOT = PROJECT_ROOT / "candidate_frontend"
+app.mount(
+    "/candidate/assets",
+    StaticFiles(directory=CANDIDATE_FRONTEND_ROOT),
+    name="candidate-assets",
+)
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/candidate", include_in_schema=False)
+def candidate_frontend() -> FileResponse:
+    return FileResponse(CANDIDATE_FRONTEND_ROOT / "index.html")
 
 
 @app.get("/ready")
