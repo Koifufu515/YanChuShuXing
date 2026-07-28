@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.application.answer_models import AnswerPayload, BenchmarkComparisonFacts
+
 
 JsonScalar = str | int | float | bool | None
 
@@ -118,6 +120,7 @@ class QueryOutcome:
     warnings: list[str] = field(default_factory=list)
     error: ErrorDetail | None = None
     metadata: QueryMetadata | None = None
+    answer: AnswerPayload | None = None
 
 
 @dataclass(frozen=True)
@@ -171,6 +174,7 @@ class QueryPlanExecutionResult:
     summary: str | None
     warnings: list[str] = field(default_factory=list)
     execution_trace: list[dict[str, Any]] = field(default_factory=list)
+    analysis_facts: BenchmarkComparisonFacts | None = None
 
 
 @dataclass(frozen=True)

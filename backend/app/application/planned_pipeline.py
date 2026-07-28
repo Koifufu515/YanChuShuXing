@@ -10,6 +10,7 @@ from app.application.models import (
     QueryPlanResult,
 )
 from app.ports.audit_logger import AuditLogger
+from app.ports.answer_composer import AnswerComposer
 from app.ports.query_plan_executor import QueryPlanExecutor
 from app.ports.query_planner import QueryPlanner
 
@@ -23,10 +24,12 @@ class PlannedQueryPipeline:
         query_plan_executor: QueryPlanExecutor,
         audit_logger: AuditLogger,
         provider_name: str = "deepseek",
+        answer_composer: AnswerComposer | None = None,
     ) -> None:
         self.query_planner = query_planner
         self.query_plan_executor = query_plan_executor
         self.audit_logger = audit_logger
+        self.answer_composer = answer_composer
         self.provider_name = provider_name
 
     def run(self, command: QueryCommand) -> QueryOutcome:
@@ -68,6 +71,16 @@ class PlannedQueryPipeline:
                 )
 
             execution = self.query_plan_executor.execute(plan_result.query_plan)
+            answer = (
+                self.answer_composer.compose(
+                    command.question,
+                    plan_result.query_plan,
+                    execution.analysis_facts,
+                )
+                if self.answer_composer is not None
+                and execution.analysis_facts is not None
+                else None
+            )
             metadata = QueryMetadata(
                 configured_mode="query_plan",
                 executed_generator="query_planner",
@@ -88,6 +101,7 @@ class PlannedQueryPipeline:
                 summary=execution.summary,
                 warnings=execution.warnings,
                 metadata=metadata,
+                answer=answer,
             )
         except ApplicationError as exc:
             error = ErrorDetail(

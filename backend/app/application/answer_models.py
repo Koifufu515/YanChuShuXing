@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+JsonScalar = str | int | float | bool | None
+
+
+@dataclass(frozen=True)
+class InstitutionRef:
+    institution_id: str | None
+    institution_name: str
+
+
+@dataclass(frozen=True)
+class MetricRef:
+    metric_id: str
+    metric_name: str
+    unit: str
+    performance_direction: str
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonFacts:
+    subject: InstitutionRef
+    metric: MetricRef
+    period: str
+    target_value: JsonScalar
+    benchmark_name: str
+    benchmark_value: JsonScalar
+    difference: JsonScalar
+    difference_unit: str
+    relative_position: str
+    performance_assessment: str
+    answer_type: str = "benchmark_comparison"
+
+
+@dataclass(frozen=True)
+class KeyMetric:
+    label: str
+    value: JsonScalar
+    unit: str | None = None
+
+
+@dataclass(frozen=True)
+class AnswerTable:
+    columns: list[str]
+    rows: list[list[JsonScalar]]
+
+
+@dataclass(frozen=True)
+class ChartSeries:
+    name: str
+    values: list[JsonScalar]
+
+
+@dataclass(frozen=True)
+class ChartSpec:
+    chart_type: str
+    title: str
+    categories: list[str]
+    series: list[ChartSeries]
+    unit: str | None = None
+
+
+@dataclass(frozen=True)
+class AnswerPayload:
+    answer_type: str
+    headline: str
+    summary: str
+    key_metrics: list[KeyMetric] = field(default_factory=list)
+    table: AnswerTable | None = None
+    chart_spec: ChartSpec | None = None

@@ -66,5 +66,6 @@ def _error_response(
                 "retryable": retryable,
             },
             "metadata": None,
+            "answer": None,
         },
     )

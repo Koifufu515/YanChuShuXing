@@ -11,6 +11,11 @@ from time import perf_counter
 from typing import Any, Callable, Iterable
 
 from app.application.errors import QueryExecutionError
+from app.application.answer_models import (
+    BenchmarkComparisonFacts,
+    InstitutionRef,
+    MetricRef,
+)
 from app.application.models import JsonScalar, QueryPlanExecutionResult
 from app.ports.database_executor import DatabaseExecutor
 
@@ -109,13 +114,133 @@ class DeterministicQueryPlanExecutor:
             final_value,
             output_plan,
         )
+        analysis_facts = self._benchmark_comparison_facts(
+            query_plan,
+            final_value,
+        )
         return QueryPlanExecutionResult(
             columns=columns,
             rows=rows,
             summary=summary,
             warnings=[],
             execution_trace=trace,
+            analysis_facts=analysis_facts,
         )
+
+    @staticmethod
+    def _benchmark_comparison_facts(
+        query_plan: dict[str, Any],
+        final_value: ExecutionValue,
+    ) -> BenchmarkComparisonFacts | None:
+        operations = query_plan.get("operations")
+        if not isinstance(operations, list) or not operations:
+            return None
+        final_operation = operations[-1]
+        if (
+            not isinstance(final_operation, dict)
+            or final_operation.get("operator_id") != "OP003"
+            or final_value.kind != "scalar"
+            or final_value.data.get("operation") != "difference"
+        ):
+            return None
+        input_refs = final_operation.get("input_refs")
+        if not isinstance(input_refs, list) or len(input_refs) != 2:
+            return None
+        producers = {
+            item.get("output_ref"): item
+            for item in operations
+            if isinstance(item, dict) and isinstance(item.get("output_ref"), str)
+        }
+        benchmark_operation = producers.get(input_refs[1])
+        if (
+            not isinstance(benchmark_operation, dict)
+            or benchmark_operation.get("operator_id") != "OP010"
+        ):
+            return None
+
+        left = final_value.data.get("left_record")
+        right = final_value.data.get("right_record")
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            return None
+        required = (
+            left.get("institution_name"),
+            left.get("metric_id"),
+            left.get("metric_name"),
+            left.get("date"),
+            left.get("unit"),
+            left.get("value"),
+            right.get("value"),
+        )
+        if any(item is None for item in required):
+            return None
+        if (
+            right.get("institution_id") is not None
+            or right.get("metric_id") != left.get("metric_id")
+            or right.get("date") != left.get("date")
+        ):
+            return None
+
+        metric_id = str(left["metric_id"])
+        performance_directions = {
+            "ZB001": "higher_is_better",
+            "ZB002": "higher_is_better",
+            "ZB011": "higher_is_better",
+            "ZB012": "lower_is_better",
+            "ZB013": "lower_is_better",
+            "ZB015": "higher_is_better",
+            "ZB016": "higher_is_better",
+            "ZB017": "lower_is_better",
+        }
+        performance_direction = performance_directions.get(metric_id)
+        if performance_direction is None:
+            return None
+        difference = Decimal(str(final_value.data.get("value")))
+        relative_position = (
+            "above" if difference > 0 else "below" if difference < 0 else "equal"
+        )
+        if difference == 0:
+            assessment = "equal"
+        elif performance_direction == "lower_is_better":
+            assessment = "better" if difference < 0 else "worse"
+        else:
+            assessment = "better" if difference > 0 else "worse"
+        unit = str(left["unit"])
+        return BenchmarkComparisonFacts(
+            subject=InstitutionRef(
+                institution_id=(
+                    str(left["institution_id"])
+                    if left.get("institution_id") is not None
+                    else None
+                ),
+                institution_name=str(left["institution_name"]),
+            ),
+            metric=MetricRef(
+                metric_id=metric_id,
+                metric_name=str(left["metric_name"]),
+                unit=unit,
+                performance_direction=performance_direction,
+            ),
+            period=str(left["date"]),
+            target_value=DeterministicQueryPlanExecutor._json_scalar(left["value"]),
+            benchmark_name=str(
+                right.get("institution_name") or "全省13家农商行平均值"
+            ).replace("均值", "平均值"),
+            benchmark_value=DeterministicQueryPlanExecutor._json_scalar(
+                right["value"]
+            ),
+            difference=DeterministicQueryPlanExecutor._json_scalar(difference),
+            difference_unit="百分点" if unit == "%" else unit,
+            relative_position=relative_position,
+            performance_assessment=assessment,
+        )
+
+    @staticmethod
+    def _json_scalar(value: object) -> JsonScalar:
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
 
     def _dispatch(
         self,

@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from app.adapters.audit.noop_logger import NoOpAuditLogger
+from app.adapters.answering.deterministic_answer_composer import (
+    DeterministicAnswerComposer,
+)
 from app.adapters.context.yaml_resolver import YAMLContextResolver
 from app.adapters.database.sqlite_executor import SQLiteExecutor
 from app.adapters.execution.deterministic_query_plan_executor import (
@@ -71,6 +74,7 @@ def build_pipeline(
             query_planner=planner,
             query_plan_executor=executor,
             audit_logger=NoOpAuditLogger(),
+            answer_composer=DeterministicAnswerComposer(),
             provider_name=resolved_settings.llm_provider,
         )
 

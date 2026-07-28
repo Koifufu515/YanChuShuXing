@@ -237,6 +237,14 @@ def _apply_style() -> None:
         .result-table th { background: #f8fafc; color: #475467; font-size: .82rem; font-weight: 650; }
         .result-table td { color: var(--ink); font-size: .92rem; }
         .result-table tbody tr:last-child td { border-bottom: 0; }
+        .answer-headline { background: var(--blue-soft); border-left: 4px solid var(--blue); padding: 1rem 1.2rem; color: #12335b; font-size: 1.08rem; font-weight: 650; line-height: 1.65; }
+        .answer-chart { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1rem 1.1rem; }
+        .answer-chart-title { color: var(--ink); font-size: .95rem; font-weight: 650; margin-bottom: .85rem; }
+        .answer-bar-row { display: grid; grid-template-columns: minmax(120px, 1.2fr) 3fr minmax(90px, .8fr); align-items: center; gap: .75rem; margin: .65rem 0; }
+        .answer-bar-label { color: #475467; font-size: .84rem; overflow-wrap: anywhere; }
+        .answer-bar-track { height: 18px; background: #edf2f7; border-radius: 3px; overflow: hidden; }
+        .answer-bar-fill { height: 100%; background: var(--blue); border-radius: 3px; min-width: 2px; }
+        .answer-bar-value { color: var(--ink); font-size: .86rem; font-weight: 650; text-align: right; }
         div[data-testid="stExpander"] { border: 1px solid var(--line); border-radius: var(--radius); background: #fff; box-shadow: none; }
         code { font-size: .84rem !important; }
         @media (max-width: 760px) {
@@ -356,6 +364,107 @@ def _query_metric_items(payload: dict) -> list[tuple[str, str]]:
     ]
 
 
+def _answer_metric_items(answer: dict) -> list[tuple[str, str]]:
+    items = answer.get("key_metrics")
+    if not isinstance(items, list):
+        return []
+    output: list[tuple[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("label"), str):
+            continue
+        value = item.get("value")
+        unit = item.get("unit")
+        rendered = str(value)
+        if isinstance(value, (int, float)):
+            rendered = f"{value:,.2f}"
+        output.append((item["label"], f"{rendered}{unit or ''}"))
+    return output
+
+
+def _render_chart_spec(chart_spec: object) -> bool:
+    if not isinstance(chart_spec, dict) or chart_spec.get("chart_type") != "bar":
+        return False
+    categories = chart_spec.get("categories")
+    series = chart_spec.get("series")
+    if (
+        not isinstance(categories, list)
+        or not categories
+        or not isinstance(series, list)
+        or not series
+        or not isinstance(series[0], dict)
+        or not isinstance(series[0].get("values"), list)
+    ):
+        return False
+    values = series[0]["values"]
+    if len(values) != len(categories) or not all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in values
+    ):
+        return False
+    maximum = max((abs(float(value)) for value in values), default=0.0)
+    if maximum == 0:
+        maximum = 1.0
+    unit = str(chart_spec.get("unit") or "")
+    rows = "".join(
+        '<div class="answer-bar-row">'
+        f'<div class="answer-bar-label">{html.escape(str(category))}</div>'
+        '<div class="answer-bar-track">'
+        f'<div class="answer-bar-fill" style="width:{abs(float(value)) / maximum * 100:.2f}%"></div>'
+        "</div>"
+        f'<div class="answer-bar-value">{html.escape(f"{value}{unit}")}</div>'
+        "</div>"
+        for category, value in zip(categories, values)
+    )
+    title = html.escape(str(chart_spec.get("title") or "数据对比"))
+    st.markdown(
+        f'<div class="answer-chart"><div class="answer-chart-title">{title}</div>{rows}</div>',
+        unsafe_allow_html=True,
+    )
+    return True
+
+
+def _render_answer_payload(answer: object) -> bool:
+    if not isinstance(answer, dict):
+        return False
+    headline = answer.get("headline")
+    summary = answer.get("summary")
+    if not isinstance(headline, str) or not isinstance(summary, str):
+        return False
+
+    st.markdown("## 业务结论")
+    st.markdown(
+        f'<div class="answer-headline">{html.escape(headline)}</div>',
+        unsafe_allow_html=True,
+    )
+    metric_items = _answer_metric_items(answer)
+    if metric_items:
+        st.markdown("## 关键指标")
+        st.markdown(
+            _cards_html(metric_items, "query-metric-grid"), unsafe_allow_html=True
+        )
+    table = answer.get("table")
+    if isinstance(table, dict):
+        columns = table.get("columns")
+        rows = table.get("rows")
+        if isinstance(columns, list) and isinstance(rows, list):
+            st.markdown("## 数据依据")
+            st.markdown(
+                _result_table_html(columns, rows),
+                unsafe_allow_html=True,
+            )
+    chart_spec = answer.get("chart_spec")
+    if chart_spec is not None:
+        st.markdown("## 图表对比")
+        if not _render_chart_spec(chart_spec):
+            st.info("当前图表暂无法展示，数据表与业务解释仍可正常查看。")
+    st.markdown("## 业务解释")
+    st.markdown(
+        f'<div class="conclusion">{html.escape(summary)}</div>',
+        unsafe_allow_html=True,
+    )
+    return True
+
+
 def _session_result(api_result: object) -> dict:
     return {
         "payload": dict(getattr(api_result, "payload")),
@@ -440,27 +549,28 @@ def _show_result(payload: dict, elapsed_ms: int) -> None:
         return
 
     st.markdown('<div class="result-band"></div>', unsafe_allow_html=True)
-    st.markdown("## 业务结论")
-    summary = payload.get("summary") or "当前结果暂无可用结论。"
-    st.markdown(
-        f'<div class="conclusion">{html.escape(str(summary))}</div>',
-        unsafe_allow_html=True,
-    )
-
-    metric_items = _query_metric_items(payload)
-    if metric_items:
-        st.markdown("## 关键指标")
+    if not _render_answer_payload(payload.get("answer")):
+        st.markdown("## 业务结论")
+        summary = payload.get("summary") or "当前结果暂无可用结论。"
         st.markdown(
-            _cards_html(metric_items, "query-metric-grid"), unsafe_allow_html=True
+            f'<div class="conclusion">{html.escape(str(summary))}</div>',
+            unsafe_allow_html=True,
         )
 
-    st.markdown("## 查询结果")
-    columns = payload.get("columns") or []
-    rows = payload.get("rows") or []
-    if columns:
-        st.markdown(_result_table_html(columns, rows), unsafe_allow_html=True)
-    else:
-        st.info("本次查询没有返回数据。")
+        metric_items = _query_metric_items(payload)
+        if metric_items:
+            st.markdown("## 关键指标")
+            st.markdown(
+                _cards_html(metric_items, "query-metric-grid"), unsafe_allow_html=True
+            )
+
+        st.markdown("## 查询结果")
+        columns = payload.get("columns") or []
+        rows = payload.get("rows") or []
+        if columns:
+            st.markdown(_result_table_html(columns, rows), unsafe_allow_html=True)
+        else:
+            st.info("本次查询没有返回数据。")
 
     for warning in payload.get("warnings") or []:
         st.warning(warning)
