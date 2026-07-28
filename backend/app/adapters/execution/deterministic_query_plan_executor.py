@@ -98,6 +98,7 @@ class DeterministicQueryPlanExecutor:
             if isinstance(institutions, dict)
             else []
         )
+        targets = targets if isinstance(targets, list) else []
         output_plan["_target_institution_ids"] = [
             item.get("institution_id")
             for item in targets
@@ -1967,7 +1968,11 @@ class DeterministicQueryPlanExecutor:
                         "yoy_change": "同比",
                     }.get(label, label)
                     if item.kind == "records":
-                        record = self._records(item)[0]
+                        # `records` has already been reduced to the requested
+                        # institution by _output_records above.  Reading the
+                        # original item here would silently pick the first
+                        # province-wide ranking row instead of the target.
+                        record = records[0]
                         value_number = self._json_number(
                             record.get("value"),
                             digits,
@@ -2396,6 +2401,12 @@ class DeterministicQueryPlanExecutor:
 
         if metric_name:
             lowered = candidate.lower()
+            if candidate in {
+                "current_value",
+                "mom_change",
+                "yoy_change",
+            }:
+                return candidate
             if any(token in lowered for token in ("top3", "best")):
                 return f"{metric_name}表现较好"
             if any(token in lowered for token in ("bottom4", "worst")):

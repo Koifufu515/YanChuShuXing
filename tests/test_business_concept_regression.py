@@ -264,6 +264,164 @@ class BusinessConceptRegressionTest(unittest.TestCase):
             },
         }
 
+    def _income_structure_plan(self):
+        institution_ids = [
+            f"ORG{index:03d}" for index in range(1, 14)
+        ]
+        operations = []
+        step = 1
+        current_refs = {}
+        base_refs = {}
+        for metric_id in ("ZB011", "ZB012", "ZB008", "ZB007", "ZB009"):
+            current_ref = f"{metric_id.lower()}_current"
+            operations.append(
+                {
+                    "step": step,
+                    "operator_id": "OP001",
+                    "input_refs": [metric_id],
+                    "output_ref": current_ref,
+                    "parameters": {
+                        "institution_ids": institution_ids,
+                        "date": "2026-04-30",
+                    },
+                }
+            )
+            current_refs[metric_id] = current_ref
+            step += 1
+            if metric_id != "ZB009":
+                base_ref = f"{metric_id.lower()}_base"
+                operations.append(
+                    {
+                        "step": step,
+                        "operator_id": "OP001",
+                        "input_refs": [metric_id],
+                        "output_ref": base_ref,
+                        "parameters": {
+                            "institution_id": "ORG002",
+                            "date": "2025-12-31",
+                        },
+                    }
+                )
+                base_refs[metric_id] = base_ref
+                step += 1
+
+        final_refs = list(current_refs.values())
+        for metric_id, direction in (
+            ("ZB011", "higher_is_better"),
+            ("ZB012", "lower_is_better"),
+            ("ZB008", "higher_is_better"),
+            ("ZB007", "higher_is_better"),
+        ):
+            rank_ref = f"{metric_id.lower()}_rank"
+            operations.append(
+                {
+                    "step": step,
+                    "operator_id": "OP012",
+                    "input_refs": [current_refs[metric_id]],
+                    "output_ref": rank_ref,
+                    "parameters": {
+                        "metric_id": metric_id,
+                        "performance_direction": direction,
+                    },
+                }
+            )
+            step += 1
+            final_refs.append(rank_ref)
+
+        for metric_id, operator_id in (
+            ("ZB011", "OP003"),
+            ("ZB012", "OP008"),
+            ("ZB008", "OP003"),
+            ("ZB007", "OP003"),
+        ):
+            change_ref = f"{metric_id.lower()}_change"
+            operations.append(
+                {
+                    "step": step,
+                    "operator_id": operator_id,
+                    "input_refs": [
+                        current_refs[metric_id],
+                        base_refs[metric_id],
+                    ],
+                    "output_ref": change_ref,
+                    "parameters": {},
+                }
+            )
+            step += 1
+            final_refs.append(change_ref)
+
+        for numerator, output_ref in (
+            ("ZB008", "net_interest_ratio_current"),
+            ("ZB007", "intermediate_income_ratio_current"),
+        ):
+            operations.append(
+                {
+                    "step": step,
+                    "operator_id": "OP006",
+                    "input_refs": [
+                        current_refs[numerator],
+                        current_refs["ZB009"],
+                    ],
+                    "output_ref": output_ref,
+                    "parameters": {
+                        "multiplier": 100,
+                        "result_unit": "%",
+                    },
+                }
+            )
+            step += 1
+            final_refs.append(output_ref)
+
+        operations.append(
+            {
+                "step": step,
+                "operator_id": "OP019",
+                "input_refs": final_refs,
+                "output_ref": "final_result",
+                "parameters": {},
+            }
+        )
+        return {
+            "status": {
+                "code": "executable",
+                "reason": None,
+                "clarification_question": None,
+            },
+            "institutions": {
+                "targets": [{"institution_id": "ORG002", "role": "target"}],
+                "comparison_population": {
+                    "type": "all_official_institutions",
+                    "institution_ids": institution_ids,
+                },
+            },
+            "metrics": {
+                "requested_metric_ids": [
+                    "ZB011", "ZB012", "ZB008", "ZB007", "ZB034",
+                ],
+                "source_metric_ids": [
+                    "ZB011", "ZB012", "ZB008", "ZB007", "ZB009",
+                ],
+                "concept_ids": ["BC006", "BC007"],
+            },
+            "time": {
+                "mode": "comparison",
+                "dates": ["2025-12-31", "2026-04-30"],
+                "start_date": None,
+                "end_date": None,
+                "grain": "day",
+                "comparison_periods": [],
+            },
+            "operations": operations,
+            "checks": [],
+            "output": {
+                "answer_type": "composite",
+                "result_fields": [],
+                "unit": None,
+                "rounding": {"mode": "final_only", "digits": 2},
+                "tie_policy": "preserve_all",
+            },
+        }
+
     def test_full_rank_wrapper_is_accepted(self):
         errors = validate_business_rules(
             self._rank_plan(13),
@@ -283,6 +441,73 @@ class BusinessConceptRegressionTest(unittest.TestCase):
         )
         messages = "\n".join(item["message"] for item in errors)
         self.assertIn("排名未合并进最终结果", messages)
+
+    def test_income_structure_requires_both_current_ratios(self):
+        for removed_ref, expected_message in (
+            (
+                "net_interest_ratio_current",
+                "净利息收入占营业收入比重",
+            ),
+            (
+                "intermediate_income_ratio_current",
+                "中间业务收入占营业收入比重",
+            ),
+        ):
+            with self.subTest(removed_ref=removed_ref):
+                plan = self._income_structure_plan()
+                plan["operations"] = [
+                    operation
+                    for operation in plan["operations"]
+                    if operation["output_ref"] != removed_ref
+                ]
+                for index, operation in enumerate(
+                    plan["operations"],
+                    start=1,
+                ):
+                    operation["step"] = index
+                    if operation["operator_id"] == "OP019":
+                        operation["input_refs"].remove(removed_ref)
+
+                errors = validate_business_rules(
+                    plan,
+                    self.context,
+                    "分析盈利能力，包含净利润、成本收入比、收入结构和较年初变化。",
+                )
+                messages = "\n".join(
+                    item["message"] for item in errors
+                )
+                self.assertIn(expected_message, messages)
+
+    def test_income_structure_requires_income_amount_changes(self):
+        for metric_id in ("ZB008", "ZB007"):
+            with self.subTest(metric_id=metric_id):
+                plan = self._income_structure_plan()
+                removed_ref = f"{metric_id.lower()}_change"
+                plan["operations"] = [
+                    operation
+                    for operation in plan["operations"]
+                    if operation["output_ref"] != removed_ref
+                ]
+                for index, operation in enumerate(
+                    plan["operations"],
+                    start=1,
+                ):
+                    operation["step"] = index
+                    if operation["operator_id"] == "OP019":
+                        operation["input_refs"].remove(removed_ref)
+
+                errors = validate_business_rules(
+                    plan,
+                    self.context,
+                    "分析盈利能力，包含净利润、成本收入比、收入结构和较年初变化。",
+                )
+                messages = "\n".join(
+                    item["message"] for item in errors
+                )
+                self.assertIn(
+                    f"{metric_id}较年初变化必须使用OP003",
+                    messages,
+                )
 
 
 if __name__ == "__main__":

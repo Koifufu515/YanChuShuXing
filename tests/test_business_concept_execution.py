@@ -261,8 +261,8 @@ class BusinessConceptExecutionTest(unittest.TestCase):
         )
         self.assertIn("存贷比", rendered)
         self.assertIn("90.0", rendered)
-        self.assertIn("乙银行", rendered)
-        self.assertNotIn("甲银行", rendered)
+        self.assertIn("80.0", rendered)
+        self.assertNotIn("100.0", rendered)
 
 
 class BusinessConceptValidationTest(unittest.TestCase):
