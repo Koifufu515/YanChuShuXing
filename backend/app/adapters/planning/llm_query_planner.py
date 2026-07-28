@@ -11,6 +11,7 @@ from app.application.models import (
     QueryPlanResult,
     QueryPlanValidation,
 )
+from app.application.query_plan_normalization import normalize_query_plan
 from app.application.query_plan_validation import validate_business_rules
 from app.ports.llm_provider import LLMProvider
 
@@ -93,6 +94,7 @@ class LLMQueryPlanner:
         plan: dict[str, Any],
         question: str,
     ) -> QueryPlanValidation:
+        plan = normalize_query_plan(plan)
         schema_errors = sorted(
             self.validator.iter_errors(plan),
             key=lambda item: list(item.path),
