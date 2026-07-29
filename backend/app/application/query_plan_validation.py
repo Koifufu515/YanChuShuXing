@@ -1182,6 +1182,12 @@ def validate_business_rules(
         if isinstance(item, dict)
         and item.get("operator_id") == "OP011"
     ]
+    op012_operations = [
+        item
+        for item in operation_list
+        if isinstance(item, dict)
+        and item.get("operator_id") == "OP012"
+    ]
     op013_operations = [
         item
         for item in operation_list
@@ -1429,78 +1435,221 @@ def validate_business_rules(
                     }
                 )
 
-    asks_last_numeric_rank = any(
+    explicit_numeric_ranking = any(
         phrase in question
         for phrase in (
-            "排最后一名",
-            "最后一名",
-            "排名最后",
+            "按数值",
+            "数值排名",
+            "数值最高",
+            "数值最低",
+            "从高到低",
+            "从低到高",
+            "均值排名",
+            "平均值排名",
+            "日均排名",
         )
-    ) and not any(
-        phrase in question
-        for phrase in ("最差", "控制得最差")
     )
-    if asks_last_numeric_rank:
-        if not op011_operations or not op013_operations:
-            errors.append(
-                {
-                    "path": "operations",
-                    "message": (
-                        "纯数值最后一名必须使用OP011降序排名后由OP013取bottom。"
-                    ),
-                }
-            )
-        else:
-            order = op011_operations[-1].get("parameters", {}).get("order")
-            direction = (
-                op013_operations[-1]
-                .get("parameters", {})
-                .get("direction")
-            )
-            if order != "descending":
-                errors.append(
-                    {
-                        "path": "operations",
-                        "message": (
-                            "纯数值排名第1名定义为数值最高，OP011.order必须为descending。"
-                        ),
-                    }
-                )
-            if direction != "bottom":
-                errors.append(
-                    {
-                        "path": "operations",
-                        "message": "排最后一名时OP013.direction必须为bottom。",
-                    }
-                )
 
-    asks_first_numeric_rank = any(
+    asks_bottom_rank = any(
+        phrase in question
+        for phrase in (
+            "排最后",
+            "排名最后",
+            "最后一名",
+            "最后三家",
+            "最后3家",
+            "排名后三",
+            "排名后3",
+            "后三名",
+            "后3名",
+            "后三家",
+            "后3家",
+            "倒数",
+        )
+    )
+
+    asks_top_rank = any(
         phrase in question
         for phrase in (
             "排第一",
             "排名第一",
             "第一名",
+            "排名前三",
+            "排名前3",
+            "前三名",
+            "前3名",
+            "前三家",
+            "前3家",
         )
-    ) and not any(
-        phrase in question
-        for phrase in ("最好", "控制得最好")
     )
-    if asks_first_numeric_rank and op011_operations and op013_operations:
-        order = op011_operations[-1].get("parameters", {}).get("order")
-        direction = (
-            op013_operations[-1]
-            .get("parameters", {})
-            .get("direction")
+
+    # 同时要求前后两组时，交给后面的专用复合排名规则处理。
+    asks_single_rank_side = (
+        asks_bottom_rank != asks_top_rank
+    )
+
+    if asks_single_rank_side:
+        expected_selection = (
+            "bottom"
+            if asks_bottom_rank
+            else "top"
         )
-        if order != "descending" or direction != "top":
+        expected_operator = (
+            "OP011"
+            if explicit_numeric_ranking
+            else "OP012"
+        )
+
+        if not op013_operations:
             errors.append(
                 {
                     "path": "operations",
                     "message": (
-                        "纯数值第一名必须使用OP011降序排名并由OP013取top。"
+                        "排名前后N项必须使用OP013截取。"
                     ),
                 }
             )
+        else:
+            selection = op013_operations[-1]
+            parameters = selection.get(
+                "parameters",
+                {},
+            )
+            parameters = (
+                parameters
+                if isinstance(parameters, dict)
+                else {}
+            )
+            input_refs = selection.get(
+                "input_refs",
+                [],
+            )
+
+            if (
+                parameters.get("direction")
+                != expected_selection
+            ):
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": (
+                            "前N名必须使用"
+                            "OP013.direction=top；"
+                            "后N名必须使用"
+                            "OP013.direction=bottom。"
+                        ),
+                    }
+                )
+
+            ranking_ref = (
+                input_refs[0]
+                if isinstance(input_refs, list)
+                and len(input_refs) == 1
+                and isinstance(input_refs[0], str)
+                else None
+            )
+            actual_operator = (
+                output_to_operator.get(
+                    ranking_ref
+                )
+                if ranking_ref is not None
+                else None
+            )
+
+            if actual_operator != expected_operator:
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": (
+                            "排名、名次、第一和最后默认表示"
+                            "绩效名次，必须使用OP012；"
+                            "只有明确要求按数值高低时"
+                            "才使用OP011。"
+                        ),
+                    }
+                )
+
+            ranking_parameters = (
+                output_to_parameters.get(
+                    ranking_ref,
+                    {},
+                )
+                if ranking_ref is not None
+                else {}
+            )
+
+            if (
+                expected_operator == "OP011"
+                and actual_operator == "OP011"
+                and ranking_parameters.get("order")
+                != "descending"
+            ):
+                errors.append(
+                    {
+                        "path": "operations",
+                        "message": (
+                            "纯数值名次统一按数值降序，"
+                            "OP011.order必须为descending。"
+                        ),
+                    }
+                )
+
+            rank_metric_ids = [
+                metric_id
+                for metric_id
+                in requested_metric_ids
+                if isinstance(metric_id, str)
+            ]
+
+            if (
+                expected_operator == "OP012"
+                and actual_operator == "OP012"
+                and len(rank_metric_ids) == 1
+            ):
+                metric_id = rank_metric_ids[0]
+                lower_is_better = {
+                    "ZB012",
+                    "ZB013",
+                    "ZB017",
+                }
+                expected_direction = (
+                    "lower_is_better"
+                    if metric_id
+                    in lower_is_better
+                    else "higher_is_better"
+                )
+
+                if (
+                    ranking_parameters.get(
+                        "metric_id"
+                    )
+                    != metric_id
+                ):
+                    errors.append(
+                        {
+                            "path": "operations",
+                            "message": (
+                                "OP012.metric_id必须与"
+                                "被排名指标一致。"
+                            ),
+                        }
+                    )
+
+                if (
+                    ranking_parameters.get(
+                        "performance_direction"
+                    )
+                    != expected_direction
+                ):
+                    errors.append(
+                        {
+                            "path": "operations",
+                            "message": (
+                                f"{metric_id}的绩效方向"
+                                f"必须为{expected_direction}。"
+                            ),
+                        }
+                    )
 
     asks_target_daily_vs_province = (
         "全省均值" in question

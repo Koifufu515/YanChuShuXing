@@ -105,8 +105,8 @@ status.code 不是 executable 时，operations 和 checks 必须为空数组。d
 13. OP010只用于“全省均值”“全省平均值”等同日横截面均值，并加入institution_completeness。按机构计算全年日均或期间均值后再排名时使用OP009，不得因为题目中出现“均值”就改用OP010。
 14. OP011用于纯数值排序，parameters.order只能是ascending或descending，不包含绩效好坏判断。比较多家机构同一指标时，应优先使用一个OP001和institution_ids数组读取全部候选机构，再将一个记录集合交给OP011；不得为每家机构分别读取后遗漏合并。
 15. OP012用于绩效排名。parameters必须包含metric_id和performance_direction；performance_direction只能是higher_is_better或lower_is_better。成本收入比、不良贷款率和逾期贷款率使用lower_is_better。比较多家机构绩效时同样优先使用一个OP001和institution_ids数组读取全部候选机构。
-16. OP013用于从 OP011 或 OP012 的排序结果中取前N项或后N项。input_refs必须只引用一个 OP011 或 OP012 输出；parameters必须包含整数 n 和 direction，direction只能是 top 或 bottom。必须加入 unrounded_comparison 与 tie_preservation，output.tie_policy必须为 preserve_all。纯数值排名统一把第1名定义为数值最高：OP011使用order=descending；“排第一／最高”使用OP013.direction=top，“排最后一名／最低”使用OP013.direction=bottom。
-17. 纯数值“最高或最低的N家”必须先使用 OP011，再使用 OP013。绩效“最好或最差的N家”必须先使用 OP012，再使用 OP013。
+16. OP013用于从 OP011 或 OP012 的排序结果中取前N项或后N项。input_refs必须只引用一个 OP011 或 OP012 输出；parameters必须包含整数 n 和 direction，direction只能是 top 或 bottom。必须加入 unrounded_comparison 与 tie_preservation，output.tie_policy必须为 preserve_all。
+17. “排名、名次、排第几、排第一、排最后、前N名、后N名”默认表示经营绩效排名，必须先使用OP012，再按题意使用OP013截取。第一和前N名使用direction=top；最后和后N名使用direction=bottom。成本收入比ZB012、不良贷款率ZB013、逾期贷款率ZB017使用lower_is_better，其余正式指标按当前项目口径使用higher_is_better。只有用户明确要求“按数值、数值排名、数值最高、数值最低、从高到低、从低到高”时，才使用OP011纯数值排序。
 18. OP014用于求最大值或最小值并返回对应机构或日期。input_refs必须严格包含一个记录序列；parameters.type只能使用max或min，不得使用maximum、minimum或其他同义词。同时询问最大值和最小值时，分别调用两次OP014，并在最后使用OP019合并。期间极值必须基于完整连续期间，加入date_completeness与unrounded_comparison。
 19. OP015用于与正式阈值比较，并直接返回指标值、阈值、是否达标和差距，不得再把 OP015 的结构化结果交给 OP003。parameters必须包含 comparison_operator、threshold 和 unit，comparison_operator只能是 >、>=、<、<=、=、!=。正式规则为：不良贷款率<5%，拨备覆盖率>=150%，资本充足率>=10.5%。阈值判断必须加入 unrounded_comparison。
 20. OP016用于固定阈值筛选。input_refs必须严格包含一个记录集合，parameters必须分别填写comparison_operator、threshold和unit，不得把完整条件写入condition或comparison自然语言字符串。当题目要求逐日或逐机构与动态基准比较，例如“高于当日全省均值”时，必须先用OP003计算目标值减基准值，再将OP003的唯一输出交给OP016，并以0为threshold；不得把目标序列和基准序列同时直接传给OP016。
@@ -122,7 +122,7 @@ status.code 不是 executable 时，operations 和 checks 必须为空数组。d
 
 以下组合属于固定规划模式，必须优先按此生成：
 
-1. 多家机构比较单点数值：一个OP001使用institution_ids读取全部候选机构，再用OP011排序；若题目询问“最好/最差”，改用OP012。
+1. 多家机构比较单点指标：一个OP001使用institution_ids读取全部候选机构。题目询问排名、名次、第一、最后、前N名或后N名时，默认使用OP012绩效排名；只有题目明确要求按数值高低排列时，才使用OP011纯数值排序。
 2. 与同日全省均值比较并计数：OP001读取全部机构→OP010生成全省均值→OP003计算各机构值减全省均值→OP016以0筛选→OP017按institution计数。目标机构逐日与当日全省均值比较时，必须使用两个OP001：一个只读取目标机构完整日序列，另一个读取全省13家完整日序列；全省序列交给OP010，随后OP003严格使用[目标机构序列, 全省日均]，再由OP016筛选和OP017按date计数。不得把全省全部机构序列直接与全省均值相减后按日期计数。
 3. 全省跨期增幅排名：两个OP001分别读取全部机构的本期值和基期值→OP007按机构和指标对齐计算增幅→OP011或OP012排序→OP013取前N。
 4. 期间均值同时返回前三和后三：OP001读取全省全部机构完整期间→OP009计算各机构期间均值→一个OP011排序→两个OP013分别使用direction=top和direction=bottom→OP019合并，且OP019必须为最后一步。
