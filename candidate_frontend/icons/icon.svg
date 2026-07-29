@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="言出数行应用图标">
+  <rect width="512" height="512" rx="108" fill="#0b5fcc"/>
+  <path d="M124 126h264a36 36 0 0 1 36 36v154a36 36 0 0 1-36 36H246l-88 62v-62h-34a36 36 0 0 1-36-36V162a36 36 0 0 1 36-36Z" fill="#fff"/>
+  <path d="M154 192h204M154 248h154M154 304h112" fill="none" stroke="#0b5fcc" stroke-linecap="round" stroke-width="24"/>
+</svg>

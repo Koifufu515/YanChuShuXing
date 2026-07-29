@@ -1,0 +1,15 @@
+{
+  "name": "言出数行",
+  "short_name": "言出数行",
+  "description": "银行智能问数与协同分析系统",
+  "lang": "zh-CN",
+  "start_url": "/candidate",
+  "scope": "/candidate",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0b5fcc",
+  "icons": [
+    {"src": "/candidate/assets/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
+    {"src": "/candidate/assets/icons/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable"}
+  ]
+}
