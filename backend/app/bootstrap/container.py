@@ -43,6 +43,21 @@ from app.ports.sql_generator import SQLGenerator
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
+def build_audit_logger(
+    settings: Settings,
+) -> AuditLogger:
+    if settings.data_environment == "real":
+        return JsonlAuditLogger(
+            PROJECT_ROOT
+            / "data"
+            / "private"
+            / "audit"
+            / "query_audit.jsonl"
+        )
+
+    return NoOpAuditLogger()
+
+
 def build_pipeline(
     database_path: Path | None = None,
     settings: Settings | None = None,
@@ -63,16 +78,12 @@ def build_pipeline(
     )
     is_real = resolved_settings.data_environment == "real"
     database_executor = SQLiteExecutor(resolved_database)
-    resolved_audit_logger = audit_logger or (
-        JsonlAuditLogger(
-            PROJECT_ROOT
-            / "data"
-            / "private"
-            / "audit"
-            / "query_audit.jsonl"
+    resolved_audit_logger = (
+        audit_logger
+        if audit_logger is not None
+        else build_audit_logger(
+            resolved_settings
         )
-        if is_real
-        else NoOpAuditLogger()
     )
 
     if is_real:
@@ -183,11 +194,37 @@ def _build_sql_generator(
 
 
 @lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings.from_env(
+        PROJECT_ROOT / ".env"
+    )
+
+
+@lru_cache(maxsize=1)
+def get_audit_logger() -> AuditLogger:
+    return build_audit_logger(
+        get_settings()
+    )
+
+
+@lru_cache(maxsize=1)
 def get_pipeline() -> QueryService:
-    return build_pipeline()
+    return build_pipeline(
+        settings=get_settings(),
+        audit_logger=get_audit_logger(),
+    )
 
 
 def configure_dependencies(app: Any) -> None:
-    from app.api.query import get_query_pipeline
+    from app.api.query import (
+        get_query_audit_logger,
+        get_query_pipeline,
+    )
 
-    app.dependency_overrides[get_query_pipeline] = get_pipeline
+    app.dependency_overrides[
+        get_query_pipeline
+    ] = get_pipeline
+
+    app.dependency_overrides[
+        get_query_audit_logger
+    ] = get_audit_logger
