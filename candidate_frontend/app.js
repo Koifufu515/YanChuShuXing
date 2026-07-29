@@ -10,7 +10,20 @@
   const $ = (selector) => document.querySelector(selector);
   const adapter = window.YCSXResultAdapter;
   const chartInstances = new Set();
-  const state = { contract: null, conversations: [], activeId: null, selectedTurn: null, page: "chat", busy: false, suggestions: [] };
+  const state = {
+    contract: null,
+    conversations: [],
+    activeId: null,
+    selectedTurn: null,
+    page: "chat",
+    busy: false,
+    suggestions: [],
+    fixtureMode: false,
+    securityAlerts: [],
+    securityStatus: "idle",
+    securityError: null,
+    securityRequestId: null,
+  };
   let drawerReturnFocus = null;
   let authDialogReturnFocus = null;
   let toastTimer = null;
@@ -174,11 +187,93 @@
 
   function logoutAuthSession() {
     clearSessionToken();
+    resetSecurityAlertState();
     updateAuthStatus();
     const input = $("#auth-token");
     if (input) input.value = "";
     $("#auth-dialog")?.close();
     showToast("已退出访问凭证会话");
+  }
+
+  function resetSecurityAlertState() {
+    state.securityAlerts = [];
+    state.securityStatus = "idle";
+    state.securityError = null;
+    state.securityRequestId = null;
+    if (typeof document !== "undefined") renderSecurityCenter();
+  }
+
+  function securityAlertTypeLabel(value) {
+    const labels = {
+      repeated_authentication_failure: "重复认证失败",
+      repeated_institution_scope_denial: "重复机构越权",
+      high_frequency_security_denial: "高频安全拒绝",
+    };
+    const key = typeof value === "string" ? value.trim() : "";
+    return labels[key] || key || "未知告警";
+  }
+
+  function securitySeverityLabel(value) {
+    const labels = { medium: "中风险", high: "高风险", critical: "严重风险" };
+    const key = typeof value === "string" ? value.trim().toLowerCase() : "";
+    return labels[key] || key || "未知风险";
+  }
+
+  function formatAlertWindow(value) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds < 0) return "暂未提供";
+    if (seconds > 0 && seconds % 60 === 0) return `${seconds / 60} 分钟`;
+    return `${seconds} 秒`;
+  }
+
+  function normalizeSecurityAlertResponse(payload) {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.alerts)) return null;
+    const alerts = payload.alerts.map(item => {
+      const source = item && typeof item === "object" ? item : {};
+      const numeric = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+      return {
+        occurredAt: typeof source.occurred_at === "string" ? source.occurred_at : "",
+        alertType: typeof source.alert_type === "string" ? source.alert_type : "",
+        severity: typeof source.severity === "string" ? source.severity.toLowerCase() : "",
+        eventCount: numeric(source.event_count),
+        windowSeconds: numeric(source.window_seconds),
+        securityAction: typeof source.security_action === "string" ? source.security_action : "",
+        triggerEventType: typeof source.trigger_event_type === "string" ? source.trigger_event_type : "",
+        triggerErrorCode: typeof source.trigger_error_code === "string" ? source.trigger_error_code : "",
+        requestId: typeof source.request_id === "string" ? source.request_id : "",
+        actorFingerprint: typeof source.actor_fingerprint === "string" ? source.actor_fingerprint : "",
+      };
+    });
+    return {
+      requestId: typeof payload.request_id === "string" ? payload.request_id : "",
+      count: alerts.length,
+      alerts,
+    };
+  }
+
+  function securityAlertCounts(alerts) {
+    const list = Array.isArray(alerts) ? alerts : [];
+    return list.reduce((counts, alert) => {
+      counts.total += 1;
+      if (alert?.severity === "medium") counts.medium += 1;
+      if (alert?.severity === "high") counts.high += 1;
+      if (alert?.severity === "critical") counts.critical += 1;
+      return counts;
+    }, { total: 0, medium: 0, high: 0, critical: 0 });
+  }
+
+  function securityAlertAccessPolicy(status, payload) {
+    const code = payload?.error?.code;
+    if (isAuthenticationError(status, payload)) {
+      return { status: "authentication_required", message: payload?.error?.message || "请连接访问凭证后手动刷新。" };
+    }
+    if (status === 403 || code === "ALERT_ACCESS_DENIED" || code === "ACCESS_DENIED") {
+      return { status: "forbidden", message: "当前账号无权查看安全告警。" };
+    }
+    if (status >= 400 || payload?.error) {
+      return { status: "error", message: "安全告警服务暂时无法完成请求。" };
+    }
+    return { status: "success", message: null };
   }
 
   window.YCSXCandidateUtils = Object.freeze({
@@ -202,6 +297,12 @@
     authenticationPolicy,
     applyAuthenticationResponse,
     logoutAuthSession,
+    securityAlertTypeLabel,
+    securitySeverityLabel,
+    formatAlertWindow,
+    normalizeSecurityAlertResponse,
+    securityAlertCounts,
+    securityAlertAccessPolicy,
   });
 
   function loadConversations() {
@@ -663,13 +764,148 @@
     if (!recentTurns.length) recent.append(node("div","empty-list","暂无真实查询记录")); else recentTurns.forEach(turn=>{const row=node("div","recent-row");row.append(node("span","",turn.question),node("time","",dateLabel(turn.createdAt)));recent.append(row);}); root.append(recent);
   }
 
-  function setPage(page) {
+  function formatAlertTime(value) {
+    const date = new Date(value);
+    if (!value || Number.isNaN(date.getTime())) return "时间未知";
+    return date.toLocaleString("zh-CN");
+  }
+
+  function renderSecurityCenter() {
+    const status = $("#security-status");
+    const content = $("#security-content");
+    const refresh = $("#refresh-security-alerts");
+    if (!status || !content || !refresh) return;
+    const loading = state.securityStatus === "loading";
+    refresh.disabled = loading;
+    refresh.textContent = loading ? "正在刷新…" : "刷新告警";
+    content.replaceChildren();
+
+    if (state.securityStatus === "idle") {
+      status.textContent = state.fixtureMode ? "验收模式不会访问安全告警接口。" : "尚未加载安全告警。";
+      return;
+    }
+    if (loading) {
+      status.textContent = "正在加载安全告警…";
+      return;
+    }
+    if (["authentication_required", "forbidden", "network_error", "invalid_response", "error"].includes(state.securityStatus)) {
+      status.textContent = "安全告警加载未完成。";
+      const error = node("div", "security-error");
+      error.setAttribute("role", "alert");
+      error.append(node("strong", "", state.securityStatus === "forbidden" ? "无权访问" : "加载失败"));
+      error.append(node("span", "", state.securityError || "请稍后手动刷新。"));
+      content.append(error);
+      return;
+    }
+
+    const counts = securityAlertCounts(state.securityAlerts);
+    status.textContent = `已加载 ${counts.total} 条安全告警。`;
+    const overview = node("div", "security-overview");
+    [["告警总数", counts.total], ["中风险", counts.medium], ["高风险", counts.high], ["严重风险", counts.critical]].forEach(([label, value]) => {
+      const card = node("article", "security-kpi");
+      card.append(node("span", "", label), node("strong", "", value));
+      overview.append(card);
+    });
+    content.append(overview);
+
+    if (!state.securityAlerts.length) {
+      content.append(node("div", "security-empty", "当前没有安全告警。"));
+      return;
+    }
+
+    const wrap = node("div", "security-table-wrap");
+    const table = node("table", "security-table");
+    const head = node("thead");
+    const headRow = node("tr");
+    ["发生时间", "风险等级", "告警类型", "触发次数", "统计窗口", "触发事件", "错误代码", "主体指纹", "请求编号"].forEach(label => headRow.append(node("th", "", label)));
+    head.append(headRow);
+    table.append(head);
+    const body = node("tbody");
+    state.securityAlerts.forEach(alert => {
+      const row = node("tr");
+      const occurred = node("time", "", formatAlertTime(alert.occurredAt));
+      occurred.title = alert.occurredAt || "未提供原始时间";
+      const severity = node("span", `security-severity severity-${alert.severity || "unknown"}`, securitySeverityLabel(alert.severity));
+      const values = [
+        occurred,
+        severity,
+        securityAlertTypeLabel(alert.alertType),
+        alert.eventCount,
+        formatAlertWindow(alert.windowSeconds),
+        alert.triggerEventType || "暂未提供",
+        alert.triggerErrorCode || "无",
+        alert.actorFingerprint || "暂未提供",
+        alert.requestId || "暂未提供",
+      ];
+      values.forEach(value => {
+        const cell = node("td");
+        cell.append(value instanceof Node ? value : document.createTextNode(String(value)));
+        row.append(cell);
+      });
+      body.append(row);
+    });
+    table.append(body);
+    wrap.append(table);
+    content.append(wrap);
+  }
+
+  async function loadSecurityAlerts() {
+    if (state.securityStatus === "loading" || state.fixtureMode) return;
+    state.securityAlerts = [];
+    state.securityRequestId = null;
+    state.securityStatus = "loading";
+    state.securityError = null;
+    renderSecurityCenter();
+    try {
+      const response = await apiFetch("/api/v1/security/alerts?limit=50", { method: "GET" });
+      let payload;
+      try { payload = await response.json(); }
+      catch (_) {
+        state.securityStatus = "invalid_response";
+        state.securityError = "服务返回了无法识别的告警数据。";
+        renderSecurityCenter();
+        return;
+      }
+      payload = applyAuthenticationResponse(response.status, payload);
+      const access = securityAlertAccessPolicy(response.status, payload);
+      if (access.status !== "success") {
+        state.securityStatus = access.status;
+        state.securityError = access.message;
+        renderSecurityCenter();
+        return;
+      }
+      const normalized = normalizeSecurityAlertResponse(payload);
+      if (!normalized) {
+        state.securityStatus = "invalid_response";
+        state.securityError = "服务返回了无法识别的告警数据。";
+        renderSecurityCenter();
+        return;
+      }
+      state.securityAlerts = normalized.alerts;
+      state.securityRequestId = normalized.requestId;
+      state.securityStatus = "success";
+      state.securityError = null;
+    } catch (_) {
+      state.securityStatus = "network_error";
+      state.securityError = "无法连接安全告警服务，请稍后手动刷新。";
+    }
+    renderSecurityCenter();
+  }
+
+  function setPage(page, focusHeading = false) {
     state.page=page; document.querySelectorAll("[data-page]").forEach(button=>button.classList.toggle("active",button.dataset.page===page));
-    document.querySelector(".workbench").classList.toggle("dashboard-mode",page==="dashboard");
-    $("#chat-view").hidden=page!=="chat"; $("#dashboard-view").hidden=page!=="dashboard"; $("#detail-content").parentElement.hidden=page!=="chat";
-    $("#page-title").textContent=page==="dashboard"?"数据看板":activeConversation()?.title||"新会话"; $("#page-subtitle").textContent=page==="dashboard"?"当前浏览器的真实使用统计":"用自然语言查询银行经营数据"; $("#head-new-chat").hidden=page!=="chat"; $("#open-details").hidden=page!=="chat";
+    document.querySelector(".workbench").classList.toggle("dashboard-mode",page!=="chat");
+    $("#chat-view").hidden=page!=="chat"; $("#dashboard-view").hidden=page!=="dashboard"; $("#security-view").hidden=page!=="security"; $("#detail-content").parentElement.hidden=page!=="chat";
+    const titles = { dashboard: ["数据看板", "当前浏览器的真实使用统计"], security: ["安全中心", "受控访问近期安全告警"] };
+    const copy = titles[page] || [activeConversation()?.title||"新会话", "用自然语言查询银行经营数据"];
+    $("#page-title").textContent=copy[0]; $("#page-subtitle").textContent=copy[1]; $("#head-new-chat").hidden=page!=="chat"; $("#open-details").hidden=page!=="chat";
     closeDrawers();
     if(page==="dashboard")renderDashboard();
+    if(state.page === "security") {
+      renderSecurityCenter();
+      if(state.securityStatus === "idle" && !state.fixtureMode) loadSecurityAlerts();
+    }
+    if (focusHeading) requestAnimationFrame(() => $("#page-title")?.focus());
   }
 
   function render() { renderHistory(); renderMessages(); renderDetails(); setPage(state.page); }
@@ -708,6 +944,7 @@
 
   function installFixture() {
     const params=new URLSearchParams(location.search); const fixture=params.get("fixture"); if(!fixture)return;
+    state.fixtureMode = true;
     const badge=node("div","fixture-banner",`截图验收模式 · ${fixture} · 数值为明确标注的界面 fixture，不是银行真实数据`); document.body.append(badge);
     const now=new Date().toISOString();
     const fixtures={
@@ -723,7 +960,7 @@
     $("#new-chat").addEventListener("click",()=>createConversation()); $("#head-new-chat").addEventListener("click",()=>createConversation());
     $("#history-search").addEventListener("input",renderHistory);
     $("#history-list").addEventListener("click",event=>{const target=event.target.closest("[data-conversation-id]");if(!target)return;state.activeId=target.dataset.conversationId;const conversation=activeConversation();state.selectedTurn=conversation?.turns?.length?conversation.turns.length-1:null;state.page="chat";persist();closeDrawers();render();});
-    document.querySelector("nav").addEventListener("click",event=>{const target=event.target.closest("[data-page]");if(target)setPage(target.dataset.page);});
+    document.querySelector("nav").addEventListener("click",event=>{const target=event.target.closest("[data-page]");if(target)setPage(target.dataset.page,true);});
     $("#message-scroll").addEventListener("change",event=>{const select=event.target.closest("[data-confirm-field]");if(!select)return;const conversation=activeConversation(),turn=conversation?.turns?.[Number(select.dataset.turnIndex)];if(!turn)return;turn.confirmationSelections={...(turn.confirmationSelections||{})};if(select.value)turn.confirmationSelections[select.dataset.confirmField]=select.value;else delete turn.confirmationSelections[select.dataset.confirmField];persist();renderMessages();renderDetails();});
     $("#message-scroll").addEventListener("click",event=>{const authRetry=event.target.closest("[data-auth-retry-turn]");if(authRetry){const turn=activeConversation()?.turns?.[Number(authRetry.dataset.authRetryTurn)];if(turn)submitQuestion(turn.question);return;}const copy=event.target.closest("[data-copy-turn]");if(copy){copyAnalysis(Number(copy.dataset.copyTurn));return;}const download=event.target.closest("[data-export-turn]");if(download){exportCurrentTable(Number(download.dataset.exportTurn));return;}const confirm=event.target.closest("[data-confirm-turn]");if(confirm){confirmTurn(Number(confirm.dataset.confirmTurn));return;}const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}if(event.target.closest("[data-confirm-field],.confirmation-option"))return;const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
     $("#composer").addEventListener("submit",event=>{event.preventDefault();const field=$("#question");const question=field.value;field.value="";submitQuestion(question);});
@@ -757,6 +994,7 @@
       if(authDialogReturnFocus&&typeof authDialogReturnFocus.focus==="function"&&!authDialogReturnFocus.inert)authDialogReturnFocus.focus();
       authDialogReturnFocus=null;
     });
+    $("#refresh-security-alerts").addEventListener("click",loadSecurityAlerts);
     syncDrawerAccessibility();
     updateAuthStatus();
   }
