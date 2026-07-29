@@ -27,7 +27,8 @@ class CandidateFrontendTest(unittest.TestCase):
 
         app_js = self.client.get("/candidate/assets/app.js")
         self.assertEqual(app_js.status_code, 200)
-        self.assertIn('fetch("/api/v1/query"', app_js.text)
+        self.assertEqual(app_js.text.count('apiFetch("/api/v1/query"'), 2)
+        self.assertNotIn('fetch("/api/v1/query"', app_js.text)
 
         contract = self.client.get("/candidate/assets/result_contract.json")
         self.assertEqual(contract.status_code, 200)
@@ -295,6 +296,151 @@ console.log(JSON.stringify({escapeRestored: true, desktopReset: true}));
             {"escapeRestored": True, "desktopReset": True},
         )
 
+    def test_auth_session_headers_body_and_error_policy(self) -> None:
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const source = fs.readFileSync("candidate_frontend/app.js", "utf8");
+function storage(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    getItem(key) { return values.has(key) ? values.get(key) : null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { values.delete(key); },
+    snapshot() { return Object.fromEntries(values); },
+  };
+}
+const sessionStorage = storage();
+const localStorage = storage({ycsx_candidate_conversations_v1: "history-stays"});
+const sandbox = {
+  sessionStorage,
+  localStorage,
+  window: {addEventListener() {}, YCSXResultAdapter: {}},
+  console,
+  setTimeout,
+  clearTimeout,
+};
+vm.runInNewContext(source, sandbox);
+const utils = sandbox.window.YCSXCandidateUtils;
+const anonymousHeaders = utils.buildApiHeaders({"Content-Type": "application/json"});
+if (Object.prototype.hasOwnProperty.call(anonymousHeaders, "Authorization")) process.exit(1);
+utils.setSessionToken("session-secret-token");
+if (utils.getSessionToken() !== "session-secret-token") process.exit(2);
+const authenticatedHeaders = utils.buildApiHeaders({"Content-Type": "application/json"});
+if (authenticatedHeaders.Authorization !== "Bearer session-secret-token") process.exit(3);
+if (localStorage.snapshot().ycsx_candidate_auth_token_v1) process.exit(4);
+const body = utils.buildQueryBody("查询不良贷款率", "conversation-1");
+if (JSON.stringify(body).includes("session-secret-token") || "token" in body || "authorization" in body) process.exit(5);
+if (body.user_id !== "competition_demo_user") process.exit(6);
+if (!utils.isAuthenticationError(401, {error: {code: "AUTHENTICATION_REQUIRED"}})) process.exit(7);
+if (!utils.isAuthenticationError(401, {error: {code: "INVALID_AUTHENTICATION"}})) process.exit(8);
+if (utils.isAuthenticationError(403, {error: {code: "ACCESS_DENIED"}})) process.exit(9);
+const authentication = utils.authenticationPolicy(401, {error: {code: "INVALID_AUTHENTICATION"}});
+if (!authentication.clearToken || !authentication.openDialog || authentication.retry) process.exit(10);
+const authorization = utils.authenticationPolicy(403, {error: {code: "ACCESS_DENIED"}});
+if (authorization.clearToken || authorization.openDialog || authorization.retry) process.exit(11);
+const csv = utils.buildCsv(["指标"], [["普通结果"]]);
+const copied = utils.analysisCopyText({payload: {}}, {summary: "普通摘要", structured: null});
+if (`${csv}${copied}`.includes("session-secret-token")) process.exit(12);
+utils.clearSessionToken();
+if (utils.getSessionToken() !== null) process.exit(13);
+if (localStorage.getItem("ycsx_candidate_conversations_v1") !== "history-stays") process.exit(14);
+console.log(JSON.stringify({anonymousHeaders, authenticatedHeaders, body, history: localStorage.snapshot()}));
+"""
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertNotIn("Authorization", payload["anonymousHeaders"])
+        self.assertEqual(
+            payload["authenticatedHeaders"]["Authorization"],
+            "Bearer session-secret-token",
+        )
+        self.assertEqual(
+            payload["history"]["ycsx_candidate_conversations_v1"],
+            "history-stays",
+        )
+
+    def test_auth_response_side_effects_clear_only_invalid_credentials(self) -> None:
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const source = fs.readFileSync("candidate_frontend/app.js", "utf8");
+const values = new Map();
+const sessionStorage = {
+  getItem(key) { return values.has(key) ? values.get(key) : null; },
+  setItem(key, value) { values.set(key, String(value)); },
+  removeItem(key) { values.delete(key); },
+};
+function element() {
+  return {
+    open: false,
+    disabled: false,
+    textContent: "",
+    value: "",
+    setAttribute() {},
+    focus() {},
+    showModal() { this.open = true; },
+    close() { this.open = false; },
+  };
+}
+const dialog = element();
+const input = element();
+const message = element();
+const status = element();
+const logout = element();
+const openButton = element();
+const elements = {
+  "#auth-dialog": dialog,
+  "#auth-token": input,
+  "#auth-message": message,
+  "#auth-status": status,
+  "#auth-logout": logout,
+  "#open-auth": openButton,
+};
+const document = {activeElement: openButton, querySelector(selector) { return elements[selector] || null; }};
+const sandbox = {
+  sessionStorage,
+  window: {addEventListener() {}, YCSXResultAdapter: {}},
+  requestAnimationFrame(callback) { callback(); },
+  console,
+  setTimeout,
+  clearTimeout,
+};
+vm.runInNewContext(source, sandbox);
+sandbox.document = document;
+const utils = sandbox.window.YCSXCandidateUtils;
+utils.setSessionToken("expired-secret");
+const invalid = {error: {code: "INVALID_AUTHENTICATION", message: "raw"}};
+utils.applyAuthenticationResponse(401, invalid);
+if (utils.getSessionToken() !== null || !dialog.open) process.exit(1);
+if (message.textContent.includes("expired-secret") || invalid.error.message.includes("expired-secret")) process.exit(2);
+dialog.close();
+utils.setSessionToken("still-valid-secret");
+const denied = {error: {code: "ACCESS_DENIED", message: "raw"}};
+utils.applyAuthenticationResponse(403, denied);
+if (utils.getSessionToken() !== "still-valid-secret" || dialog.open) process.exit(3);
+if (denied.error.message !== "当前账号无权访问相关机构或字段。") process.exit(4);
+console.log(JSON.stringify({invalidMessage: invalid.error.message, deniedMessage: denied.error.message}));
+"""
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertIn("失效", payload["invalidMessage"])
+        self.assertEqual(
+            payload["deniedMessage"],
+            "当前账号无权访问相关机构或字段。",
+        )
+
     def test_mobile_pwa_and_export_contracts_are_present(self) -> None:
         frontend = ROOT / "candidate_frontend"
         index = (frontend / "index.html").read_text("utf-8")
@@ -309,7 +455,10 @@ console.log(JSON.stringify({escapeRestored: true, desktopReset: true}));
         self.assertIn("100dvh", styles)
         self.assertIn("@media(max-width:768px)", styles)
         self.assertIn("overflow-x:auto", styles)
-        self.assertIn('fetch("/api/v1/query"', app_source)
+        self.assertIn(".left-rail,.detail-panel{position:fixed;z-index:70", styles)
+        self.assertIn(".drawer-scrim{display:block;position:fixed;z-index:55", styles)
+        self.assertEqual(app_source.count('apiFetch("/api/v1/query"'), 2)
+        self.assertNotIn('fetch("/api/v1/query"', app_source)
         self.assertIn("download.disabled = !view.columns.length || !view.rows.length", app_source)
         self.assertNotIn("localhost", app_source)
         self.assertIn('url.pathname.startsWith("/api/")', worker)
@@ -325,6 +474,25 @@ console.log(JSON.stringify({escapeRestored: true, desktopReset: true}));
         self.assertEqual(manifest["display"], "standalone")
         self.assertEqual(manifest["start_url"], "/candidate")
         self.assertEqual({icon["purpose"] for icon in manifest["icons"]}, {"any", "maskable"})
+
+    def test_auth_dialog_and_shared_request_contract_are_present(self) -> None:
+        frontend = ROOT / "candidate_frontend"
+        index = (frontend / "index.html").read_text("utf-8")
+        app_source = (frontend / "app.js").read_text("utf-8")
+
+        self.assertIn('<dialog id="auth-dialog"', index)
+        self.assertIn('for="auth-token"', index)
+        self.assertIn('id="auth-token" type="password"', index)
+        self.assertIn("凭证仅保存在当前浏览器会话", index)
+        self.assertIn('id="auth-connect"', index)
+        self.assertIn('id="auth-cancel"', index)
+        self.assertIn('id="auth-logout"', index)
+        self.assertEqual(app_source.count('apiFetch("/api/v1/query"'), 2)
+        self.assertNotIn('fetch("/api/v1/query"', app_source)
+        self.assertIn("sessionStorage.setItem(AUTH_TOKEN_KEY", app_source)
+        self.assertNotIn("localStorage.setItem(AUTH_TOKEN_KEY", app_source)
+        self.assertNotIn("Authorization: Bearer", index)
+        self.assertNotIn("session-secret-token", index)
 
 
 if __name__ == "__main__":

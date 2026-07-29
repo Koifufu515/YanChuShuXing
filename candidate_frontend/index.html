@@ -23,7 +23,11 @@
       <label class="search"><span>⌕</span><input id="history-search" type="search" placeholder="检索历史会话" autocomplete="off" aria-label="检索历史会话"></label>
       <div id="history-list" class="history-list" aria-live="polite"></div>
       <details class="privacy-note"><summary>隐私说明</summary><p>历史会话仅保存在当前浏览器。本地历史不等同于银行级服务端审计，问数接口响应不会由 Service Worker 缓存。</p></details>
-      <footer class="user-card"><span class="avatar">U</span><div><strong>比赛演示用户</strong><small>安全状态以服务端返回为准</small></div></footer>
+      <footer class="user-card">
+        <span class="avatar">U</span>
+        <div class="user-summary"><strong>比赛演示用户</strong><small>安全状态以服务端返回为准</small></div>
+        <button id="open-auth" class="auth-trigger" type="button" aria-haspopup="dialog" aria-controls="auth-dialog"><span>访问凭证</span><strong id="auth-status">未连接</strong></button>
+      </footer>
     </aside>
 
     <section class="center-panel" data-testid="chat-panel">
@@ -45,6 +49,23 @@
     </aside>
   </main>
   <button id="drawer-scrim" class="drawer-scrim" type="button" aria-label="关闭抽屉" tabindex="-1"></button>
+  <dialog id="auth-dialog" class="auth-dialog" aria-labelledby="auth-title">
+    <form id="auth-form" class="auth-form">
+      <header class="auth-head">
+        <div><h2 id="auth-title">访问凭证</h2><p>连接当前浏览器会话与受保护的问数服务。</p></div>
+        <button id="auth-close" class="dialog-close" type="button" aria-label="关闭访问凭证窗口">×</button>
+      </header>
+      <label class="auth-field" for="auth-token"><span>访问令牌</span><input id="auth-token" type="password" autocomplete="off" spellcheck="false" required></label>
+      <p class="auth-security-note">凭证仅保存在当前浏览器会话，不会进入历史记录和导出内容。</p>
+      <p id="auth-message" class="auth-message" role="status" aria-live="polite"></p>
+      <footer class="auth-actions">
+        <button id="auth-logout" class="ghost danger-ghost" type="button">退出当前会话</button>
+        <span class="auth-actions-spacer"></span>
+        <button id="auth-cancel" class="ghost" type="button">取消</button>
+        <button id="auth-connect" class="primary auth-connect" type="submit">连接</button>
+      </footer>
+    </form>
+  </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/candidate/assets/echarts.min.js" defer></script>
   <script src="/candidate/assets/result_adapter.js" defer></script>
