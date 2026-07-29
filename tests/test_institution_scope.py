@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.adapters.security.institution_scope import (
+from app.application.institution_scope import (
     InstitutionAccessDeniedError,
     evaluate_institution_access,
     extract_institution_ids,

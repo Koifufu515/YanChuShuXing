@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.adapters.security.result_security import (
+from app.application.result_security import (
     secure_result,
 )
 from app.application.security_models import (

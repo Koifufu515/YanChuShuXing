@@ -1,4 +1,5 @@
 import inspect
+from pathlib import Path
 import unittest
 
 
@@ -27,6 +28,41 @@ class ArchitectureContractTest(unittest.TestCase):
             SQLSafetyChecker,
         )
         self.assertEqual(len(ports), 7)
+
+    def test_application_layer_does_not_import_adapters(
+        self,
+    ) -> None:
+        application_root = (
+            Path(__file__).resolve().parents[1]
+            / "backend"
+            / "app"
+            / "application"
+        )
+        violations = []
+
+        for module_path in sorted(
+            application_root.rglob("*.py")
+        ):
+            module_source = (
+                module_path.read_text(
+                    encoding="utf-8"
+                )
+                .lower()
+            )
+
+            if "app.adapters" in module_source:
+                violations.append(
+                    module_path.name
+                )
+
+        self.assertEqual(
+            violations,
+            [],
+            (
+                "application层不能反向依赖"
+                f"adapters层：{violations}"
+            ),
+        )
 
     def test_api_layer_does_not_import_composition_root(self) -> None:
         from app.api import query
