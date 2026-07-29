@@ -143,10 +143,16 @@ class PermissionDemoSeedTest(unittest.TestCase):
                 )
             )
 
-            distribution = {
-                (row[0], row[1]): row[2]
-                for row in rows
-            }
+            distribution: dict[
+                tuple[str, str],
+                int,
+            ] = {}
+
+            for row in rows:
+                key = (row[1], row[2])
+                distribution[key] = (
+                    distribution.get(key, 0) + 1
+                )
             self.assertEqual(
                 distribution[("ORG009", "RM001")],
                 2,
