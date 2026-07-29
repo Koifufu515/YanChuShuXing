@@ -17,6 +17,9 @@
     selectedTurn: null,
     page: "chat",
     busy: false,
+    sessionProfile: null,
+    sessionStatus: "idle",
+    sessionError: null,
     suggestions: [],
     fixtureMode: false,
     securityAlerts: [],
@@ -148,12 +151,299 @@
     return { clearToken: false, openDialog: false, retry: false, message: null };
   }
 
+  function normalizeAccessScope(value) {
+    const source = value && typeof value === "object" ? value : {};
+    return {
+      enforced: Boolean(source.enforced),
+      allAccess: Boolean(source.all_access),
+      ids: Array.isArray(source.ids)
+        ? source.ids.map(item => String(item)).filter(Boolean)
+        : [],
+    };
+  }
+
+  function normalizeSessionProfile(payload) {
+    if (!payload || typeof payload !== "object") return null;
+
+    const subjectId = typeof payload.subject_id === "string"
+      ? payload.subject_id.trim()
+      : "";
+    const displayName = typeof payload.display_name === "string"
+      ? payload.display_name.trim()
+      : "";
+    const role = typeof payload.role === "string"
+      ? payload.role.trim()
+      : "";
+
+    if (!subjectId || !displayName || !role) return null;
+
+    const capabilities = payload.capabilities
+      && typeof payload.capabilities === "object"
+      ? payload.capabilities
+      : {};
+
+    return {
+      requestId: typeof payload.request_id === "string"
+        ? payload.request_id
+        : "",
+      subjectId,
+      displayName,
+      role,
+      roleLabel: typeof payload.role_label === "string"
+        && payload.role_label.trim()
+        ? payload.role_label.trim()
+        : role,
+      authenticated: Boolean(payload.authenticated),
+      maskingProfile: typeof payload.masking_profile === "string"
+        ? payload.masking_profile
+        : "none",
+      institutionScope: normalizeAccessScope(
+        payload.institution_scope
+      ),
+      relationshipManagerScope: normalizeAccessScope(
+        payload.relationship_manager_scope
+      ),
+      capabilities: {
+        canQuery: Boolean(capabilities.can_query),
+        canViewPermissionDemo: Boolean(
+          capabilities.can_view_permission_demo
+        ),
+        canViewSecurityAlerts: Boolean(
+          capabilities.can_view_security_alerts
+        ),
+        rowScopeActive: Boolean(
+          capabilities.row_scope_active
+        ),
+      },
+    };
+  }
+
+  function sessionScopeSummary(
+    scope,
+    {
+      allLabel = "全部",
+      noneLabel = "未配置",
+    } = {},
+  ) {
+    if (!scope || typeof scope !== "object") {
+      return noneLabel;
+    }
+    if (scope.allAccess) return allLabel;
+    if (Array.isArray(scope.ids) && scope.ids.length) {
+      return scope.ids.join("、");
+    }
+    return scope.enforced ? "无授权范围" : noneLabel;
+  }
+
+  function sessionCapabilitySummary(capabilities) {
+    if (!capabilities || typeof capabilities !== "object") {
+      return "暂未提供";
+    }
+
+    const labels = [];
+    if (capabilities.canQuery) labels.push("智能问数");
+    if (capabilities.canViewPermissionDemo) {
+      labels.push("权限演示");
+    }
+    if (capabilities.canViewSecurityAlerts) {
+      labels.push("安全告警");
+    }
+
+    return labels.length ? labels.join("、") : "无可访问功能";
+  }
+
+  function renderSessionProfile() {
+    if (typeof document === "undefined") return;
+
+    const profile = state.sessionProfile;
+    const connected = state.sessionStatus === "authenticated"
+      && Boolean(profile);
+
+    const name = $("#session-name");
+    const role = $("#session-role");
+    const avatar = $("#session-avatar");
+    const profileBox = $("#session-profile");
+    const securityNav = $("#security-nav");
+
+    if (name) {
+      name.textContent = connected
+        ? profile.displayName
+        : "比赛演示用户";
+    }
+    if (role) {
+      role.textContent = connected
+        ? `${profile.roleLabel} · ${profile.maskingProfile}`
+        : state.sessionStatus === "loading"
+          ? "正在验证访问凭证"
+          : state.sessionStatus === "error"
+            ? "身份验证失败"
+            : "尚未验证身份";
+    }
+    if (avatar) {
+      avatar.textContent = connected
+        ? profile.displayName.slice(0, 1).toUpperCase()
+        : "U";
+    }
+
+    if (securityNav) {
+      const allowed = Boolean(
+        connected
+        && profile.capabilities.canViewSecurityAlerts
+      );
+      securityNav.disabled = !allowed;
+      securityNav.setAttribute(
+        "aria-disabled",
+        String(!allowed),
+      );
+      securityNav.title = allowed
+        ? "查看安全告警"
+        : "当前身份无权查看安全告警";
+    }
+
+    if (!profileBox) return;
+
+    profileBox.hidden = !connected;
+    if (!connected) return;
+
+    $("#session-subject").textContent = profile.subjectId;
+    $("#session-role-label").textContent = (
+      `${profile.roleLabel}（${profile.role}）`
+    );
+    $("#session-institution-scope").textContent = (
+      sessionScopeSummary(
+        profile.institutionScope,
+        {
+          allLabel: "全部机构",
+          noneLabel: "未启用机构限制",
+        },
+      )
+    );
+    $("#session-rm-scope").textContent = (
+      sessionScopeSummary(
+        profile.relationshipManagerScope,
+        {
+          allLabel: "全部客户经理",
+          noneLabel: "未配置行级范围",
+        },
+      )
+    );
+    $("#session-masking").textContent = (
+      profile.maskingProfile
+    );
+    $("#session-capabilities").textContent = (
+      sessionCapabilitySummary(profile.capabilities)
+    );
+  }
+
+  function resetSessionProfile() {
+    state.sessionProfile = null;
+    state.sessionStatus = "idle";
+    state.sessionError = null;
+    if (typeof document !== "undefined") {
+      renderSessionProfile();
+    }
+  }
+
+  async function loadSessionProfile() {
+    if (!getSessionToken()) {
+      resetSessionProfile();
+      updateAuthStatus();
+      return null;
+    }
+
+    state.sessionStatus = "loading";
+    state.sessionError = null;
+    updateAuthStatus();
+
+    try {
+      const response = await apiFetch(
+        "/api/v1/session/me"
+      );
+
+      let payload;
+      try {
+        payload = await response.json();
+      } catch (_) {
+        payload = {
+          error: {
+            code: "INVALID_RESPONSE",
+            message: "身份服务返回了无法识别的内容。",
+          },
+        };
+      }
+
+      if (
+        isAuthenticationError(
+          response.status,
+          payload,
+        )
+      ) {
+        clearSessionToken();
+      }
+
+      if (!response.ok || payload?.error) {
+        throw new Error(
+          payload?.error?.message
+          || "无法验证当前访问凭证。"
+        );
+      }
+
+      const profile = normalizeSessionProfile(
+        payload
+      );
+
+      if (!profile || !profile.authenticated) {
+        throw new Error(
+          "身份服务未返回有效的认证身份。"
+        );
+      }
+
+      state.sessionProfile = profile;
+      state.sessionStatus = "authenticated";
+      state.sessionError = null;
+      updateAuthStatus();
+
+      return profile;
+    } catch (error) {
+      state.sessionProfile = null;
+      state.sessionStatus = getSessionToken()
+        ? "error"
+        : "idle";
+      state.sessionError = (
+        error instanceof Error
+          ? error.message
+          : "无法验证当前访问凭证。"
+      );
+      updateAuthStatus();
+
+      return null;
+    }
+  }
+
   function updateAuthStatus() {
-    const connected = Boolean(getSessionToken());
+    const hasToken = Boolean(getSessionToken());
+    const connected = (
+      state.sessionStatus === "authenticated"
+      && Boolean(state.sessionProfile)
+    );
     const status = $("#auth-status");
     const logout = $("#auth-logout");
-    if (status) status.textContent = connected ? "已连接" : "未连接";
-    if (logout) logout.disabled = !connected;
+
+    if (status) {
+      status.textContent = (
+        state.sessionStatus === "loading"
+          ? "验证中"
+          : connected
+            ? "已连接"
+            : hasToken
+              ? "待验证"
+              : "未连接"
+      );
+    }
+
+    if (logout) logout.disabled = !hasToken;
+
+    renderSessionProfile();
   }
 
   function openAuthDialog(message = "", trigger = null) {
@@ -179,6 +469,7 @@
     result.error.retryable = false;
     if (policy.clearToken) {
       clearSessionToken();
+      resetSessionProfile();
       updateAuthStatus();
     }
     if (policy.openDialog) openAuthDialog(policy.message);
@@ -187,6 +478,7 @@
 
   function logoutAuthSession() {
     clearSessionToken();
+    resetSessionProfile();
     resetSecurityAlertState();
     updateAuthStatus();
     const input = $("#auth-token");
@@ -296,6 +588,10 @@
     isAuthenticationError,
     authenticationPolicy,
     applyAuthenticationResponse,
+    normalizeSessionProfile,
+    sessionScopeSummary,
+    sessionCapabilitySummary,
+    loadSessionProfile,
     logoutAuthSession,
     securityAlertTypeLabel,
     securitySeverityLabel,
@@ -978,18 +1274,38 @@
     $("#auth-close").addEventListener("click",()=>$("#auth-dialog").close());
     $("#auth-cancel").addEventListener("click",()=>$("#auth-dialog").close());
     $("#auth-logout").addEventListener("click",logoutAuthSession);
-    $("#auth-form").addEventListener("submit",event=>{
+    $("#auth-form").addEventListener("submit",async event=>{
       event.preventDefault();
       const input=$("#auth-token"),connect=$("#auth-connect"),message=$("#auth-message");
       connect.disabled=true;
+      message.textContent="正在验证访问凭证……";
+
       const stored=setSessionToken(input.value);
       input.value="";
-      if(!stored){message.textContent="请输入有效的访问凭证。";connect.disabled=false;input.focus();return;}
-      updateAuthStatus();
+
+      if(!stored){
+        message.textContent="请输入有效的访问凭证。";
+        connect.disabled=false;
+        input.focus();
+        return;
+      }
+
+      const profile=await loadSessionProfile();
+
+      if(!profile){
+        clearSessionToken();
+        resetSessionProfile();
+        updateAuthStatus();
+        message.textContent=state.sessionError||"访问凭证无效或已经失效。";
+        connect.disabled=false;
+        input.focus();
+        return;
+      }
+
       message.textContent="";
       connect.disabled=false;
       $("#auth-dialog").close();
-      showToast("访问凭证已保存");
+      showToast(`${profile.displayName} 已连接`);
     });
     $("#auth-dialog").addEventListener("close",()=>{
       $("#auth-token").value="";
@@ -1014,6 +1330,7 @@
     const response=await fetch("/candidate/assets/result_contract.json"); state.contract=await response.json();
     try { const examples=await fetch("/api/v1/examples"); const payload=await examples.json(); state.suggestions=(payload.examples||[]).map(item=>item.question).filter(Boolean); } catch (_) { state.suggestions=[]; }
     loadConversations(); installFixture(); bind(); render(); registerServiceWorker();
+    if(getSessionToken()) await loadSessionProfile();
     const params=new URLSearchParams(location.search);
     const demoMode=params.get("real_demo");
     const demoIndex={single:0,ranking:1,trend:2,"1":1}[demoMode];

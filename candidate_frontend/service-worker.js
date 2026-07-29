@@ -1,5 +1,7 @@
 "use strict";
 
+// Session profile UI revision: 2026-07-29.
+
 const CACHE_PREFIX = "yanchushuxing-candidate-";
 const CACHE_NAME = `${CACHE_PREFIX}v2`;
 const STATIC_ASSETS = [
