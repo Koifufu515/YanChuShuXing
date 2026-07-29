@@ -266,10 +266,43 @@ def validate_business_rules(
     ]
     explicit_metric_aliases = {
         "存款规模": "ZB001",
+        "存款总额": "ZB001",
+        "存款": "ZB001",
         "贷款规模": "ZB002",
+        "贷款总额": "ZB002",
+        "贷款": "ZB002",
+        "不良率": "ZB013",
         "网点平均存款规模": "ZB030",
         "日均存款余额": "ZB031",
     }
+    short_metric_aliases = {"存款", "贷款"}
+    short_alias_search_text = question
+    protected_long_metric_phrases = {
+        *explicit_metric_names,
+        *(
+            alias
+            for alias in explicit_metric_aliases
+            if alias not in short_metric_aliases
+        ),
+    }
+    for phrase in sorted(
+        protected_long_metric_phrases,
+        key=len,
+        reverse=True,
+    ):
+        short_alias_search_text = short_alias_search_text.replace(
+            phrase,
+            "",
+        )
+
+    def metric_alias_is_explicit(alias: str) -> bool:
+        search_text = (
+            short_alias_search_text
+            if alias in short_metric_aliases
+            else question
+        )
+        return alias in search_text
+
     explicit_metric_ids = {
         metric_ids_by_name[name]
         for name in explicit_metric_names
@@ -278,7 +311,7 @@ def validate_business_rules(
     explicit_metric_ids.update(
         metric_id
         for alias, metric_id in explicit_metric_aliases.items()
-        if alias in question
+        if metric_alias_is_explicit(alias)
     )
     concept_search_text = question
     protected_metric_phrases = [
@@ -286,15 +319,47 @@ def validate_business_rules(
         *[
             alias
             for alias in explicit_metric_aliases
-            if alias in question
+            if metric_alias_is_explicit(alias)
         ],
     ]
+
+    concept_names = [
+        str(item.get("name"))
+        for item in business_concept_items
+        if isinstance(item.get("name"), str)
+    ]
+
+    for concept_name in sorted(
+        concept_names,
+        key=len,
+        reverse=True,
+    ):
+        for metric_phrase in sorted(
+            protected_metric_phrases,
+            key=len,
+            reverse=True,
+        ):
+            qualified_pattern = (
+                rf"{re.escape(concept_name)}"
+                rf"\s*[（(][^）)]*"
+                rf"{re.escape(metric_phrase)}"
+                rf"[^）)]*[）)]"
+            )
+            concept_search_text = re.sub(
+                qualified_pattern,
+                "",
+                concept_search_text,
+            )
+
     for metric_name in sorted(
         protected_metric_phrases,
         key=len,
         reverse=True,
     ):
-        concept_search_text = concept_search_text.replace(metric_name, "")
+        concept_search_text = concept_search_text.replace(
+            metric_name,
+            "",
+        )
     matched_pending_concepts = [
         name for name in pending_concept_names if name in concept_search_text
     ]
@@ -1072,10 +1137,31 @@ def validate_business_rules(
     directly_requested_stored_metrics = {
         metric_id
         for metric_name, metric_id in metric_name_to_id.items()
-        if metric_id in stored_metric_ids and metric_name in question
+        if metric_id in stored_metric_ids
+        and metric_name in question
     }
+    directly_requested_stored_metrics.update(
+        metric_id
+        for alias, metric_id in explicit_metric_aliases.items()
+        if metric_id in stored_metric_ids
+        and metric_alias_is_explicit(alias)
+    )
+    asks_ranking_results = (
+        "排名" in question
+        or "排第几" in question
+        or re.search(
+            r"第\d+名|前\d+|后\d+",
+            question,
+        )
+        is not None
+    )
     asks_direct_metric_values = (
-        re.search(r"(?:分别|各自|各)?是多少|为多少", question) is not None
+        re.search(
+            r"(?:分别|各自|各)?是多少|为多少",
+            question,
+        )
+        is not None
+        and not asks_ranking_results
     )
     if directly_requested_stored_metrics and asks_direct_metric_values:
         extra_sources = source_metric_id_set - directly_requested_stored_metrics
