@@ -25,6 +25,8 @@ from app.application.answer_models import (
     RankingOverviewFacts,
     DirectMetricValueFact,
     DirectMetricValuesFacts,
+    CalculationInputFact,
+    CalculatedMetricFacts,
 )
 from app.application.models import JsonScalar, QueryPlanExecutionResult
 from app.ports.database_executor import DatabaseExecutor
@@ -147,6 +149,11 @@ class DeterministicQueryPlanExecutor:
             analysis_facts = self._benchmark_comparison_facts(
                 query_plan,
                 final_value,
+            )
+        if analysis_facts is None:
+            analysis_facts = self._calculated_metric_facts(
+                query_plan,
+                context,
             )
         return QueryPlanExecutionResult(
             columns=columns,
@@ -1695,6 +1702,394 @@ class DeterministicQueryPlanExecutor:
         if isinstance(value, (str, int, float, bool)) or value is None:
             return value
         return str(value)
+
+    @staticmethod
+    def _calculated_metric_facts(
+        query_plan: dict[str, Any],
+        context: dict[str, ExecutionValue],
+    ) -> CalculatedMetricFacts | None:
+        operations = query_plan.get("operations")
+
+        if (
+            not isinstance(operations, list)
+            or len(operations) < 3
+        ):
+            return None
+
+        calculation_types = {
+            "OP003": "directional_difference",
+            "OP004": "absolute_difference",
+            "OP006": "ratio",
+            "OP007": "growth_rate",
+            "OP008": "percentage_point_change",
+        }
+        expected_operations = {
+            "OP003": {"difference"},
+            "OP004": {"absolute_difference"},
+            "OP006": {"ratio", "quotient"},
+            "OP007": {"growth_rate"},
+            "OP008": {"percentage_point_change"},
+        }
+        roles = {
+            "OP003": ("left", "right"),
+            "OP004": ("left", "right"),
+            "OP006": ("numerator", "denominator"),
+            "OP007": ("current", "base"),
+            "OP008": ("current", "base"),
+        }
+
+        final_operation = operations[-1]
+
+        if not isinstance(final_operation, dict):
+            return None
+
+        final_operator = final_operation.get(
+            "operator_id"
+        )
+
+        if final_operator not in calculation_types:
+            return None
+
+        final_ref = final_operation.get(
+            "output_ref"
+        )
+        input_refs = final_operation.get(
+            "input_refs"
+        )
+        parameters = final_operation.get(
+            "parameters"
+        )
+
+        if (
+            not isinstance(final_ref, str)
+            or not isinstance(input_refs, list)
+            or len(input_refs) != 2
+            or not all(
+                isinstance(ref, str)
+                for ref in input_refs
+            )
+            or input_refs[0] == input_refs[1]
+            or not isinstance(parameters, dict)
+        ):
+            return None
+
+        producers: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        for operation in operations:
+            if not isinstance(operation, dict):
+                return None
+
+            output_ref = operation.get(
+                "output_ref"
+            )
+
+            if (
+                not isinstance(output_ref, str)
+                or output_ref in producers
+            ):
+                return None
+
+            producers[output_ref] = operation
+
+        read_operations: list[
+            dict[str, Any]
+        ] = []
+
+        for input_ref in input_refs:
+            producer = producers.get(input_ref)
+
+            if (
+                not isinstance(producer, dict)
+                or producer.get("operator_id")
+                != "OP001"
+            ):
+                return None
+
+            read_operations.append(producer)
+
+        relevant_refs = {
+            final_ref,
+            input_refs[0],
+            input_refs[1],
+        }
+
+        for operation in operations:
+            if (
+                operation.get("output_ref")
+                in relevant_refs
+            ):
+                continue
+
+            if operation.get("operator_id") != "OP021":
+                return None
+
+        final_value = context.get(final_ref)
+
+        if (
+            not isinstance(final_value, ExecutionValue)
+            or final_value.kind != "scalar"
+            or not isinstance(
+                final_value.data,
+                dict,
+            )
+            or final_value.data.get("value")
+            is None
+        ):
+            return None
+
+        actual_operation = (
+            final_value.data.get("operation")
+            or final_value.metadata.get(
+                "operation"
+            )
+        )
+
+        if (
+            actual_operation
+            not in expected_operations[
+                final_operator
+            ]
+        ):
+            return None
+
+        records: list[
+            dict[str, Any]
+        ] = []
+
+        for input_ref, read_operation in zip(
+            input_refs,
+            read_operations,
+            strict=True,
+        ):
+            execution_value = context.get(
+                input_ref
+            )
+
+            if (
+                not isinstance(
+                    execution_value,
+                    ExecutionValue,
+                )
+                or execution_value.kind
+                != "records"
+                or not isinstance(
+                    execution_value.data,
+                    list,
+                )
+                or len(execution_value.data)
+                != 1
+                or not isinstance(
+                    execution_value.data[0],
+                    dict,
+                )
+            ):
+                return None
+
+            record = execution_value.data[0]
+            read_refs = read_operation.get(
+                "input_refs"
+            )
+            read_parameters = (
+                read_operation.get(
+                    "parameters"
+                )
+            )
+
+            if (
+                not isinstance(read_refs, list)
+                or len(read_refs) != 1
+                or not isinstance(
+                    read_refs[0],
+                    str,
+                )
+                or not isinstance(
+                    read_parameters,
+                    dict,
+                )
+            ):
+                return None
+
+            required_strings = (
+                "institution_id",
+                "institution_name",
+                "date",
+                "metric_id",
+                "metric_name",
+                "unit",
+            )
+
+            if any(
+                not isinstance(
+                    record.get(field),
+                    str,
+                )
+                for field in required_strings
+            ):
+                return None
+
+            if record.get("value") is None:
+                return None
+
+            if (
+                read_refs[0]
+                != record["metric_id"]
+                or read_parameters.get(
+                    "institution_id"
+                )
+                != record["institution_id"]
+                or read_parameters.get("date")
+                != record["date"]
+            ):
+                return None
+
+            records.append(record)
+
+        institution_ids = {
+            str(record["institution_id"])
+            for record in records
+        }
+        institution_names = {
+            str(record["institution_name"])
+            for record in records
+        }
+
+        if (
+            len(institution_ids) != 1
+            or len(institution_names) != 1
+        ):
+            return None
+
+        input_facts = [
+            CalculationInputFact(
+                role=role,
+                metric_id=str(
+                    record["metric_id"]
+                ),
+                metric_name=str(
+                    record["metric_name"]
+                ),
+                period=str(record["date"]),
+                value=(
+                    DeterministicQueryPlanExecutor
+                    ._json_scalar(
+                        record["value"]
+                    )
+                ),
+                unit=str(record["unit"]),
+            )
+            for role, record in zip(
+                roles[final_operator],
+                records,
+                strict=True,
+            )
+        ]
+
+        result_metric_id = (
+            final_value.metadata.get(
+                "metric_id"
+            )
+            or parameters.get(
+                "result_metric_id"
+            )
+        )
+
+        if not isinstance(
+            result_metric_id,
+            str,
+        ):
+            result_metric_id = None
+
+        result_metric_name = (
+            final_value.metadata.get(
+                "metric_name"
+            )
+            or parameters.get(
+                "result_metric_name"
+            )
+        )
+
+        left_name = str(
+            records[0]["metric_name"]
+        )
+        right_name = str(
+            records[1]["metric_name"]
+        )
+
+        if (
+            not isinstance(
+                result_metric_name,
+                str,
+            )
+            or not result_metric_name
+        ):
+            if final_operator == "OP003":
+                result_metric_name = (
+                    f"{left_name}变化额"
+                    if left_name == right_name
+                    else (
+                        f"{left_name}与"
+                        f"{right_name}差额"
+                    )
+                )
+            elif final_operator == "OP004":
+                result_metric_name = (
+                    f"{left_name}绝对变化额"
+                    if left_name == right_name
+                    else (
+                        f"{left_name}与"
+                        f"{right_name}绝对差额"
+                    )
+                )
+            elif final_operator == "OP006":
+                result_metric_name = (
+                    f"{left_name}占"
+                    f"{right_name}比率"
+                )
+            elif final_operator == "OP007":
+                result_metric_name = (
+                    f"{left_name}增长率"
+                )
+            else:
+                result_metric_name = (
+                    f"{left_name}变化"
+                )
+
+        if (
+            not isinstance(final_value.unit, str)
+            or not final_value.unit
+        ):
+            return None
+
+        return CalculatedMetricFacts(
+            subject=InstitutionRef(
+                institution_id=next(
+                    iter(institution_ids)
+                ),
+                institution_name=next(
+                    iter(institution_names)
+                ),
+            ),
+            calculation_type=(
+                calculation_types[
+                    final_operator
+                ]
+            ),
+            result_metric_id=result_metric_id,
+            result_metric_name=(
+                result_metric_name
+            ),
+            result_value=(
+                DeterministicQueryPlanExecutor
+                ._json_scalar(
+                    final_value.data["value"]
+                )
+            ),
+            result_unit=final_value.unit,
+            inputs=input_facts,
+        )
 
     def _dispatch(
         self,

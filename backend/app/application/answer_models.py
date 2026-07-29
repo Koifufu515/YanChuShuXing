@@ -116,12 +116,35 @@ class DirectMetricValuesFacts:
     answer_type: str = "direct_metric_values"
 
 
+@dataclass(frozen=True)
+class CalculationInputFact:
+    role: str
+    metric_id: str | None
+    metric_name: str
+    period: str | None
+    value: JsonScalar
+    unit: str
+
+
+@dataclass(frozen=True)
+class CalculatedMetricFacts:
+    subject: InstitutionRef
+    calculation_type: str
+    result_metric_id: str | None
+    result_metric_name: str
+    result_value: JsonScalar
+    result_unit: str
+    inputs: list[CalculationInputFact]
+    answer_type: str = "calculated_metric"
+
+
 AnalysisFacts = (
     BenchmarkComparisonFacts
     | MainMetricsOverviewFacts
     | TrendOverviewFacts
     | RankingOverviewFacts
     | DirectMetricValuesFacts
+    | CalculatedMetricFacts
 )
 
 

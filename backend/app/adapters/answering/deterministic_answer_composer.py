@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.application.answer_models import (
@@ -16,6 +16,7 @@ from app.application.answer_models import (
     TrendOverviewFacts,
     RankingOverviewFacts,
     DirectMetricValuesFacts,
+    CalculatedMetricFacts,
 )
 
 
@@ -52,6 +53,14 @@ class DeterministicAnswerComposer:
             DirectMetricValuesFacts,
         ):
             return self._compose_direct_metric_values(
+                facts
+            )
+
+        if isinstance(
+            facts,
+            CalculatedMetricFacts,
+        ):
+            return self._compose_calculated_metric(
                 facts
             )
 
@@ -514,6 +523,376 @@ class DeterministicAnswerComposer:
             return "绩效排名"
 
         return "排名"
+
+    def _compose_calculated_metric(
+        self,
+        facts: CalculatedMetricFacts,
+    ) -> AnswerPayload:
+        if len(facts.inputs) != 2:
+            raise ValueError(
+                "派生计算事实必须包含两个输入。"
+            )
+
+        try:
+            result_decimal = Decimal(
+                str(facts.result_value)
+            )
+        except (
+            InvalidOperation,
+            ValueError,
+        ) as exc:
+            raise ValueError(
+                "派生计算结果必须是数值。"
+            ) from exc
+
+        if not facts.result_unit:
+            raise ValueError(
+                "派生计算结果缺少单位。"
+            )
+
+        role_inputs = {
+            item.role: item
+            for item in facts.inputs
+        }
+
+        if len(role_inputs) != 2:
+            raise ValueError(
+                "派生计算输入角色重复。"
+            )
+
+        subject = (
+            facts.subject.institution_name
+        )
+        result_display = self._display_number(
+            facts.result_value
+        )
+        absolute_display = self._display_number(
+            abs(result_decimal)
+        )
+
+        display_result_unit = (
+            "个百分点"
+            if facts.result_unit == "百分点"
+            else facts.result_unit
+        )
+
+        def period_text(
+            period: str | None,
+        ) -> str:
+            if period is None:
+                return "未指定期间"
+
+            return self._display_period(period)
+
+        def input_value_text(
+            role: str,
+        ) -> str:
+            item = role_inputs[role]
+
+            return (
+                f"{self._display_number(item.value)}"
+                f"{item.unit}"
+            )
+
+        calculation_type = (
+            facts.calculation_type
+        )
+
+        if calculation_type == "growth_rate":
+            required_roles = {
+                "current",
+                "base",
+            }
+
+            if set(role_inputs) != required_roles:
+                raise ValueError(
+                    "增长率计算需要 current 和 base 输入。"
+                )
+
+            current = role_inputs["current"]
+            base = role_inputs["base"]
+
+            if result_decimal > 0:
+                movement = (
+                    f"增长{absolute_display}"
+                    f"{display_result_unit}"
+                )
+            elif result_decimal < 0:
+                movement = (
+                    f"下降{absolute_display}"
+                    f"{display_result_unit}"
+                )
+            else:
+                movement = "保持不变"
+
+            headline = (
+                f"{subject}"
+                f"{current.metric_name}"
+                f"{movement}"
+            )
+            summary = (
+                f"从{period_text(base.period)}到"
+                f"{period_text(current.period)}，"
+                f"{subject}的{current.metric_name}"
+                f"由{input_value_text('base')}"
+                f"变为{input_value_text('current')}，"
+                f"{movement}。"
+            )
+
+        elif (
+            calculation_type
+            == "percentage_point_change"
+        ):
+            required_roles = {
+                "current",
+                "base",
+            }
+
+            if set(role_inputs) != required_roles:
+                raise ValueError(
+                    "百分点变化需要 current 和 base 输入。"
+                )
+
+            current = role_inputs["current"]
+            base = role_inputs["base"]
+
+            if result_decimal > 0:
+                movement = (
+                    f"上升{absolute_display}"
+                    f"{display_result_unit}"
+                )
+            elif result_decimal < 0:
+                movement = (
+                    f"下降{absolute_display}"
+                    f"{display_result_unit}"
+                )
+            else:
+                movement = "保持不变"
+
+            headline = (
+                f"{subject}"
+                f"{current.metric_name}"
+                f"{movement}"
+            )
+            summary = (
+                f"从{period_text(base.period)}到"
+                f"{period_text(current.period)}，"
+                f"{subject}的{current.metric_name}"
+                f"由{input_value_text('base')}"
+                f"变为{input_value_text('current')}，"
+                f"{movement}。"
+            )
+
+        elif calculation_type == "ratio":
+            required_roles = {
+                "numerator",
+                "denominator",
+            }
+
+            if set(role_inputs) != required_roles:
+                raise ValueError(
+                    "比率计算需要 numerator 和 denominator 输入。"
+                )
+
+            numerator = role_inputs[
+                "numerator"
+            ]
+            denominator = role_inputs[
+                "denominator"
+            ]
+
+            headline = (
+                f"{subject}"
+                f"{facts.result_metric_name}为"
+                f"{result_display}"
+                f"{display_result_unit}"
+            )
+            summary = (
+                f"{subject}的"
+                f"{numerator.metric_name}为"
+                f"{input_value_text('numerator')}，"
+                f"{denominator.metric_name}为"
+                f"{input_value_text('denominator')}，"
+                f"计算得到"
+                f"{facts.result_metric_name}为"
+                f"{result_display}"
+                f"{facts.result_unit}。"
+            )
+
+        elif calculation_type in {
+            "directional_difference",
+            "absolute_difference",
+        }:
+            required_roles = {
+                "left",
+                "right",
+            }
+
+            if set(role_inputs) != required_roles:
+                raise ValueError(
+                    "差额计算需要 left 和 right 输入。"
+                )
+
+            left = role_inputs["left"]
+            right = role_inputs["right"]
+            same_metric = (
+                left.metric_id == right.metric_id
+                and left.metric_name
+                == right.metric_name
+            )
+
+            if (
+                calculation_type
+                == "absolute_difference"
+            ):
+                headline = (
+                    f"{subject}"
+                    f"{facts.result_metric_name}为"
+                    f"{absolute_display}"
+                    f"{display_result_unit}"
+                )
+                summary = (
+                    f"{subject}的"
+                    f"{left.metric_name}为"
+                    f"{input_value_text('left')}，"
+                    f"{right.metric_name}为"
+                    f"{input_value_text('right')}，"
+                    f"二者绝对差额为"
+                    f"{absolute_display}"
+                    f"{facts.result_unit}。"
+                )
+
+            elif same_metric:
+                if result_decimal > 0:
+                    movement = (
+                        f"增加{absolute_display}"
+                        f"{display_result_unit}"
+                    )
+                elif result_decimal < 0:
+                    movement = (
+                        f"减少{absolute_display}"
+                        f"{display_result_unit}"
+                    )
+                else:
+                    movement = "保持不变"
+
+                headline = (
+                    f"{subject}"
+                    f"{left.metric_name}"
+                    f"{movement}"
+                )
+                summary = (
+                    f"从{period_text(right.period)}到"
+                    f"{period_text(left.period)}，"
+                    f"{subject}的{left.metric_name}"
+                    f"由{input_value_text('right')}"
+                    f"变为{input_value_text('left')}，"
+                    f"{movement}。"
+                )
+
+            else:
+                if result_decimal > 0:
+                    relation = (
+                        f"高于{right.metric_name}"
+                        f"{absolute_display}"
+                        f"{display_result_unit}"
+                    )
+                elif result_decimal < 0:
+                    relation = (
+                        f"低于{right.metric_name}"
+                        f"{absolute_display}"
+                        f"{display_result_unit}"
+                    )
+                else:
+                    relation = (
+                        f"与{right.metric_name}"
+                        "相同"
+                    )
+
+                headline = (
+                    f"{subject}"
+                    f"{left.metric_name}"
+                    f"{relation}"
+                )
+                summary = (
+                    f"{subject}的"
+                    f"{left.metric_name}为"
+                    f"{input_value_text('left')}，"
+                    f"{right.metric_name}为"
+                    f"{input_value_text('right')}，"
+                    f"{left.metric_name}{relation}。"
+                )
+
+        else:
+            raise ValueError(
+                "不支持的派生计算类型："
+                f"{calculation_type}"
+            )
+
+        role_labels = {
+            "current": "本期值",
+            "base": "基期值",
+            "numerator": "分子",
+            "denominator": "分母",
+            "left": "左侧值",
+            "right": "右侧值",
+        }
+
+        table_rows = [
+            [
+                role_labels.get(
+                    item.role,
+                    item.role,
+                ),
+                item.metric_name,
+                (
+                    period_text(item.period)
+                    if item.period is not None
+                    else "—"
+                ),
+                self._display_number(
+                    item.value
+                ),
+                item.unit,
+            ]
+            for item in facts.inputs
+        ]
+
+        table_rows.append(
+            [
+                "计算结果",
+                facts.result_metric_name,
+                "—",
+                result_display,
+                facts.result_unit,
+            ]
+        )
+
+        return AnswerPayload(
+            answer_type=facts.answer_type,
+            headline=headline,
+            summary=summary,
+            key_metrics=[
+                KeyMetric(
+                    label=(
+                        facts.result_metric_name
+                    ),
+                    value=facts.result_value,
+                    unit=facts.result_unit,
+                )
+            ],
+            table=AnswerTable(
+                columns=[
+                    "项目",
+                    "指标",
+                    "期间",
+                    "数值",
+                    "单位",
+                ],
+                rows=table_rows,
+            ),
+            chart_spec=None,
+        )
 
     def _compose_direct_metric_values(
         self,
