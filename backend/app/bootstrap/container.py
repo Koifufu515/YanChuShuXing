@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from app.adapters.audit.alerting_logger import AlertingAuditLogger
 from app.adapters.audit.jsonl_logger import JsonlAuditLogger
 from app.adapters.audit.noop_logger import NoOpAuditLogger
 from app.adapters.answering.deterministic_answer_composer import (
@@ -47,12 +48,22 @@ def build_audit_logger(
     settings: Settings,
 ) -> AuditLogger:
     if settings.data_environment == "real":
-        return JsonlAuditLogger(
+        audit_dir = (
             PROJECT_ROOT
             / "data"
             / "private"
             / "audit"
-            / "query_audit.jsonl"
+        )
+
+        return AlertingAuditLogger(
+            delegate=JsonlAuditLogger(
+                audit_dir
+                / "query_audit.jsonl"
+            ),
+            alert_path=(
+                audit_dir
+                / "security_alerts.jsonl"
+            ),
         )
 
     return NoOpAuditLogger()

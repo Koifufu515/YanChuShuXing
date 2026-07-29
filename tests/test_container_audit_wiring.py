@@ -7,6 +7,9 @@ from unittest.mock import patch
 
 from fastapi import FastAPI
 
+from app.adapters.audit.alerting_logger import (
+    AlertingAuditLogger,
+)
 from app.adapters.audit.jsonl_logger import (
     JsonlAuditLogger,
 )
@@ -50,7 +53,7 @@ class ContainerAuditWiringTest(
         container.get_audit_logger.cache_clear()
         container.get_pipeline.cache_clear()
 
-    def test_real_environment_builds_jsonl_logger(
+    def test_real_environment_builds_alerting_logger(
         self,
     ) -> None:
         logger = container.build_audit_logger(
@@ -61,17 +64,27 @@ class ContainerAuditWiringTest(
 
         self.assertIsInstance(
             logger,
+            AlertingAuditLogger,
+        )
+        self.assertIsInstance(
+            logger.delegate,
             JsonlAuditLogger,
         )
+
+        audit_dir = (
+            container.PROJECT_ROOT
+            / "data"
+            / "private"
+            / "audit"
+        )
+
         self.assertEqual(
-            logger.path,
-            (
-                container.PROJECT_ROOT
-                / "data"
-                / "private"
-                / "audit"
-                / "query_audit.jsonl"
-            ),
+            logger.delegate.path,
+            audit_dir / "query_audit.jsonl",
+        )
+        self.assertEqual(
+            logger.alert_path,
+            audit_dir / "security_alerts.jsonl",
         )
 
     def test_demo_environment_builds_noop_logger(
