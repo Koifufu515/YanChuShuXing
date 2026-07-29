@@ -6,6 +6,7 @@ from app.api.error_handlers import register_error_handlers
 from app.api.permission_demo import router as permission_demo_router
 from app.api.query import router as query_router
 from app.api.security_alerts import router as security_alert_router
+from app.api.session import router as session_router
 from app.bootstrap.container import configure_dependencies
 from app.application.errors import ApplicationError
 from app.bootstrap.container import PROJECT_ROOT
@@ -20,6 +21,7 @@ app = FastAPI(
 app.include_router(query_router)
 app.include_router(security_alert_router)
 app.include_router(permission_demo_router)
+app.include_router(session_router)
 register_error_handlers(app)
 configure_dependencies(app)
 
