@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.error_handlers import register_error_handlers
+from app.api.permission_demo import router as permission_demo_router
 from app.api.query import router as query_router
 from app.api.security_alerts import router as security_alert_router
 from app.bootstrap.container import configure_dependencies
