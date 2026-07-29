@@ -3,6 +3,9 @@ from __future__ import annotations
 from app.adapters.security.institution_scope import (
     require_institution_access,
 )
+from app.adapters.security.result_security import (
+    secure_result,
+)
 from app.application.errors import ApplicationError
 from app.application.models import (
     AuditEvent,
@@ -82,6 +85,41 @@ class PlannedQueryPipeline:
             execution = self.query_plan_executor.execute(
                 plan_result.query_plan
             )
+
+            columns = execution.columns
+            rows = execution.rows
+            summary = execution.summary
+            warnings = list(execution.warnings)
+            protected_result = False
+
+            if command.security_principal is not None:
+                secured_result = secure_result(
+                    columns=execution.columns,
+                    rows=execution.rows,
+                    principal=command.security_principal,
+                )
+
+                columns = secured_result.columns
+                rows = secured_result.rows
+
+                if secured_result.removed_columns:
+                    protected_result = True
+                    warnings.append(
+                        "部分字段已根据当前岗位权限移除。"
+                    )
+
+                if secured_result.masked_columns:
+                    protected_result = True
+                    warnings.append(
+                        "部分字段已根据当前岗位执行动态脱敏。"
+                    )
+
+                if protected_result:
+                    summary = (
+                        "查询成功，结果已根据当前身份完成"
+                        "字段权限控制和动态脱敏。"
+                    )
+
             answer = (
                 self.answer_composer.compose(
                     command.question,
@@ -90,6 +128,7 @@ class PlannedQueryPipeline:
                 )
                 if self.answer_composer is not None
                 and execution.analysis_facts is not None
+                and not protected_result
                 else None
             )
             metadata = QueryMetadata(
@@ -107,10 +146,10 @@ class PlannedQueryPipeline:
             return QueryOutcome(
                 request_id=command.request_id,
                 question=command.question,
-                columns=execution.columns,
-                rows=execution.rows,
-                summary=execution.summary,
-                warnings=execution.warnings,
+                columns=columns,
+                rows=rows,
+                summary=summary,
+                warnings=warnings,
                 metadata=metadata,
                 answer=answer,
             )
