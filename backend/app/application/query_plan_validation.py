@@ -165,6 +165,95 @@ def has_check(plan: dict[str, Any], check_type: str) -> bool:
     )
 
 
+def _strip_explanatory_metric_parentheticals(
+    question: str,
+    metric_names: list[str],
+) -> str:
+    """移除正式指标名称后仅用于解释公式的括号内容。"""
+    text = question
+
+    for metric_name in sorted(
+        set(metric_names),
+        key=len,
+        reverse=True,
+    ):
+        pattern = (
+            rf"({re.escape(metric_name)})"
+            rf"\s*[（(]([^（）()]*)[）)]"
+        )
+
+        def replace(
+            match: re.Match[str],
+        ) -> str:
+            explanation = match.group(2)
+
+            if any(
+                token in explanation
+                for token in (
+                    "除以",
+                    "÷",
+                    "/",
+                    "比值",
+                    "计算公式",
+                )
+            ):
+                return match.group(1)
+
+            return match.group(0)
+
+        text = re.sub(
+            pattern,
+            replace,
+            text,
+        )
+
+    return text
+
+
+def _longest_non_overlapping_phrases(
+    text: str,
+    phrases: list[str],
+) -> list[str]:
+    """优先匹配最长短语，避免短指标名污染长指标名。"""
+    occupied: list[tuple[int, int]] = []
+    matched: list[str] = []
+
+    for phrase in sorted(
+        {
+            item
+            for item in phrases
+            if isinstance(item, str)
+            and item
+        },
+        key=lambda item: (
+            -len(item),
+            item,
+        ),
+    ):
+        for occurrence in re.finditer(
+            re.escape(phrase),
+            text,
+        ):
+            start, end = occurrence.span()
+
+            overlaps = any(
+                start < occupied_end
+                and end > occupied_start
+                for (
+                    occupied_start,
+                    occupied_end,
+                ) in occupied
+            )
+
+            if overlaps:
+                continue
+
+            matched.append(phrase)
+            occupied.append((start, end))
+            break
+
+    return matched
+
 def validate_business_rules(
     plan: dict[str, Any],
     context: dict[str, Any],
@@ -257,13 +346,13 @@ def validate_business_rules(
         and isinstance(item.get("name"), str)
         and isinstance(item.get("metric_id"), str)
     }
-    explicit_metric_names = [
-        str(item.get("name"))
-        for item in context.get("metrics", [])
-        if isinstance(item, dict)
-        and isinstance(item.get("name"), str)
-        and str(item.get("name")) in question
-    ]
+    metric_detection_text = (
+        _strip_explanatory_metric_parentheticals(
+            question,
+            list(metric_ids_by_name),
+        )
+    )
+
     explicit_metric_aliases = {
         "存款规模": "ZB001",
         "存款总额": "ZB001",
@@ -274,53 +363,49 @@ def validate_business_rules(
         "不良率": "ZB013",
         "网点平均存款规模": "ZB030",
         "日均存款余额": "ZB031",
+        "对公贷款占各项贷款的比例": "ZB026",
+        "对公贷款占各项贷款的比重": "ZB026",
+        "对公贷款占贷款总额的比例": "ZB026",
+        "对公贷款占贷款总额的比重": "ZB026",
+        "不良贷款余额占贷款总额的比例": "ZB013",
+        "不良贷款余额占贷款总额的比重": "ZB013",
+        "不良贷款余额占各项贷款的比例": "ZB013",
+        "不良贷款余额占各项贷款的比重": "ZB013",
     }
-    short_metric_aliases = {"存款", "贷款"}
-    short_alias_search_text = question
-    protected_long_metric_phrases = {
-        *explicit_metric_names,
-        *(
-            alias
-            for alias in explicit_metric_aliases
-            if alias not in short_metric_aliases
-        ),
-    }
-    for phrase in sorted(
-        protected_long_metric_phrases,
-        key=len,
-        reverse=True,
-    ):
-        short_alias_search_text = short_alias_search_text.replace(
-            phrase,
-            "",
-        )
 
-    def metric_alias_is_explicit(alias: str) -> bool:
-        search_text = (
-            short_alias_search_text
-            if alias in short_metric_aliases
-            else question
+    metric_phrase_to_id = {
+        **metric_ids_by_name,
+        **explicit_metric_aliases,
+    }
+
+    matched_metric_phrases = (
+        _longest_non_overlapping_phrases(
+            metric_detection_text,
+            list(metric_phrase_to_id),
         )
-        return alias in search_text
+    )
+
+    explicit_metric_names = [
+        phrase
+        for phrase in matched_metric_phrases
+        if phrase in metric_ids_by_name
+    ]
+
+    matched_explicit_aliases = [
+        phrase
+        for phrase in matched_metric_phrases
+        if phrase in explicit_metric_aliases
+    ]
 
     explicit_metric_ids = {
-        metric_ids_by_name[name]
-        for name in explicit_metric_names
-        if name in metric_ids_by_name
+        metric_phrase_to_id[phrase]
+        for phrase in matched_metric_phrases
     }
-    explicit_metric_ids.update(
-        metric_id
-        for alias, metric_id in explicit_metric_aliases.items()
-        if metric_alias_is_explicit(alias)
-    )
+
     concept_search_text = question
     protected_metric_phrases = [
         *explicit_metric_names,
-        *[
-            alias
-            for alias in explicit_metric_aliases
-            if metric_alias_is_explicit(alias)
-        ],
+        *matched_explicit_aliases,
     ]
 
     concept_names = [
@@ -395,6 +480,31 @@ def validate_business_rules(
                     "问题未命中任何状态为“待项目确认”的业务概念；"
                     "正式指标全名或明确别名应生成executable计划，"
                     "不得使用pending_project_definition。"
+                ),
+            }
+        )
+
+    direct_ratio_value_phrases = (
+        "不良贷款余额占贷款总额的比例",
+        "不良贷款余额占贷款总额的比重",
+        "不良贷款余额占各项贷款的比例",
+        "不良贷款余额占各项贷款的比重",
+    )
+
+    if (
+        status_code == "clarification_required"
+        and any(
+            phrase in question
+            for phrase in direct_ratio_value_phrases
+        )
+    ):
+        errors.append(
+            {
+                "path": "status.code",
+                "message": (
+                    "该问法已明确对应不良贷款率ZB013，"
+                    "应按当前值查询并返回数值，"
+                    "不得仅因“大不大”要求澄清。"
                 ),
             }
         )
@@ -1138,13 +1248,13 @@ def validate_business_rules(
         metric_id
         for metric_name, metric_id in metric_name_to_id.items()
         if metric_id in stored_metric_ids
-        and metric_name in question
+        and metric_name in explicit_metric_names
     }
     directly_requested_stored_metrics.update(
-        metric_id
-        for alias, metric_id in explicit_metric_aliases.items()
-        if metric_id in stored_metric_ids
-        and metric_alias_is_explicit(alias)
+        explicit_metric_aliases[alias]
+        for alias in matched_explicit_aliases
+        if explicit_metric_aliases[alias]
+        in stored_metric_ids
     )
     asks_ranking_results = (
         "排名" in question

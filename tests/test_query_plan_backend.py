@@ -1733,6 +1733,336 @@ class QueryPlanContractTest(unittest.TestCase):
         )
 
 
+
+class DerivedMetricLanguageRuleTest(
+    unittest.TestCase
+):
+    def setUp(self):
+        root = Path(
+            __file__
+        ).resolve().parents[1]
+
+        self.context = json.loads(
+            (
+                root
+                / "config/query_planner/"
+                "query_planner_context.json"
+            ).read_text(encoding="utf-8")
+        )
+
+    def ratio_plan(
+        self,
+        *,
+        requested_metric_id,
+        numerator_metric_id,
+        denominator_metric_id,
+        institution_id,
+        date_value,
+    ):
+        plan = base_plan(
+            operations=[
+                {
+                    "step": 1,
+                    "operator_id": "OP001",
+                    "input_refs": [
+                        numerator_metric_id
+                    ],
+                    "output_ref": "numerator",
+                    "parameters": {
+                        "institution_id": (
+                            institution_id
+                        ),
+                        "date": date_value,
+                    },
+                },
+                {
+                    "step": 2,
+                    "operator_id": "OP001",
+                    "input_refs": [
+                        denominator_metric_id
+                    ],
+                    "output_ref": "denominator",
+                    "parameters": {
+                        "institution_id": (
+                            institution_id
+                        ),
+                        "date": date_value,
+                    },
+                },
+                {
+                    "step": 3,
+                    "operator_id": "OP006",
+                    "input_refs": [
+                        "numerator",
+                        "denominator",
+                    ],
+                    "output_ref": "ratio",
+                    "parameters": {
+                        "numerator": "numerator",
+                        "denominator": "denominator",
+                        "multiplier": 100,
+                        "result_unit": "%",
+                    },
+                },
+            ],
+            checks=[
+                {
+                    "type": "record_exists",
+                    "parameters": {
+                        "metric_ids": [
+                            numerator_metric_id,
+                            denominator_metric_id,
+                        ],
+                    },
+                },
+                {
+                    "type": "metric_completeness",
+                    "parameters": {
+                        "metric_ids": [
+                            numerator_metric_id,
+                            denominator_metric_id,
+                        ],
+                    },
+                },
+                {
+                    "type": "denominator_nonzero",
+                    "parameters": {
+                        "metric_ids": [
+                            denominator_metric_id
+                        ],
+                    },
+                },
+                {
+                    "type": "unit_consistency",
+                    "parameters": {
+                        "metric_ids": [
+                            numerator_metric_id,
+                            denominator_metric_id,
+                        ],
+                    },
+                },
+            ],
+            output={
+                "answer_type": "single_value",
+                "result_fields": [
+                    "metric_value",
+                    "unit",
+                ],
+                "unit": "%",
+                "rounding": {
+                    "mode": "final_only",
+                    "digits": 2,
+                },
+                "tie_policy": None,
+            },
+        )
+
+        plan["institutions"]["targets"] = [
+            {
+                "institution_id": (
+                    institution_id
+                ),
+                "role": "target",
+            }
+        ]
+
+        plan["metrics"] = {
+            "requested_metric_ids": [
+                requested_metric_id
+            ],
+            "source_metric_ids": [
+                numerator_metric_id,
+                denominator_metric_id,
+            ],
+            "concept_ids": [],
+        }
+
+        plan["time"] = {
+            "mode": "point",
+            "dates": [date_value],
+            "start_date": None,
+            "end_date": None,
+            "grain": "month_end",
+            "comparison_periods": [],
+        }
+
+        return plan
+
+    def test_corporate_loan_ratio_phrase_is_one_metric(
+        self,
+    ):
+        plan = self.ratio_plan(
+            requested_metric_id="ZB026",
+            numerator_metric_id="ZB005",
+            denominator_metric_id="ZB002",
+            institution_id="ORG003",
+            date_value="2025-09-30",
+        )
+
+        errors = validate_business_rules(
+            plan,
+            self.context,
+            (
+                "江苏省C市农商行2025年9月末，"
+                "对公贷款占各项贷款的比例是多少？"
+            ),
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_formula_parenthetical_is_explanation(
+        self,
+    ):
+        plan = self.ratio_plan(
+            requested_metric_id="ZB023",
+            numerator_metric_id="ZB011",
+            denominator_metric_id="ZB009",
+            institution_id="ORG007",
+            date_value="2026-01-31",
+        )
+
+        errors = validate_business_rules(
+            plan,
+            self.context,
+            (
+                "江苏省G市农商行2026年1月底，"
+                "净利润率（净利润除以营业收入）"
+                "是多少？"
+            ),
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_defined_npl_ratio_cannot_only_clarify(
+        self,
+    ):
+        plan = base_plan(
+            operations=[],
+            checks=[],
+        )
+
+        plan["status"] = {
+            "code": "clarification_required",
+            "reason": "缺少评价标准。",
+            "clarification_question": (
+                "请提供比较标准。"
+            ),
+        }
+
+        plan["institutions"]["targets"] = [
+            {
+                "institution_id": "ORG011",
+                "role": "target",
+            }
+        ]
+
+        plan["metrics"] = {
+            "requested_metric_ids": [
+                "ZB013"
+            ],
+            "source_metric_ids": [],
+            "concept_ids": [],
+        }
+
+        plan["time"] = {
+            "mode": "point",
+            "dates": ["2025-12-31"],
+            "start_date": None,
+            "end_date": None,
+            "grain": "day",
+            "comparison_periods": [],
+        }
+
+        errors = validate_business_rules(
+            plan,
+            self.context,
+            (
+                "江苏省K市农商行2025年12月31日，"
+                "不良贷款余额占贷款总额的比重大不大？"
+            ),
+        )
+
+        messages = " ".join(
+            error["message"]
+            for error in errors
+        )
+
+        self.assertIn(
+            "不得仅因“大不大”要求澄清",
+            messages,
+        )
+
+    def test_defined_npl_ratio_executes_as_zb013(
+        self,
+    ):
+        plan = base_plan(
+            operations=[
+                {
+                    "step": 1,
+                    "operator_id": "OP001",
+                    "input_refs": ["ZB013"],
+                    "output_ref": "npl_ratio",
+                    "parameters": {
+                        "institution_id": "ORG011",
+                        "date": "2025-12-31",
+                    },
+                }
+            ],
+            checks=[
+                {
+                    "type": "record_exists",
+                    "parameters": {
+                        "metric_ids": ["ZB013"],
+                    },
+                }
+            ],
+            output={
+                "answer_type": "single_value",
+                "result_fields": [
+                    "metric_value",
+                ],
+                "unit": "%",
+                "rounding": {
+                    "mode": "final_only",
+                    "digits": 2,
+                },
+                "tie_policy": None,
+            },
+        )
+
+        plan["institutions"]["targets"] = [
+            {
+                "institution_id": "ORG011",
+                "role": "target",
+            }
+        ]
+
+        plan["metrics"] = {
+            "requested_metric_ids": ["ZB013"],
+            "source_metric_ids": ["ZB013"],
+            "concept_ids": [],
+        }
+
+        plan["time"] = {
+            "mode": "point",
+            "dates": ["2025-12-31"],
+            "start_date": None,
+            "end_date": None,
+            "grain": "day",
+            "comparison_periods": [],
+        }
+
+        errors = validate_business_rules(
+            plan,
+            self.context,
+            (
+                "江苏省K市农商行2025年12月31日，"
+                "不良贷款余额占贷款总额的比重大不大？"
+            ),
+        )
+
+        self.assertEqual(errors, [])
+
 class QueryPlannerComponentTest(unittest.TestCase):
     def test_invalid_first_plan_is_repaired_once(self):
         schema = {

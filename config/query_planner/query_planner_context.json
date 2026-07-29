@@ -614,8 +614,8 @@
     },
     {
       "rule_id": "LR020",
-      "expression": "不良贷款余额占贷款总额的比例",
-      "interpretation": "优先映射ZB013。"
+      "expression": "不良贷款余额占贷款总额或各项贷款的比例／比重",
+      "interpretation": "映射ZB013；即使同时出现“大不大”，也查询并返回当前不良贷款率数值，不额外作高低判断，不要求澄清。"
     },
     {
       "rule_id": "LR021",
@@ -630,7 +630,7 @@
     {
       "rule_id": "LR023",
       "expression": "大不大／高不高／好不好且未给比较对象",
-      "interpretation": "标记clarification_required。"
+      "interpretation": "仅当问题确实要求高低、好坏等定性判断，且不存在LR020所定义的明确比例指标、比较对象或正式阈值时，才标记clarification_required。"
     },
     {
       "rule_id": "LR024",
