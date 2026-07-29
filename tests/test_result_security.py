@@ -101,6 +101,41 @@ class ResultSecurityTest(
             ["内部备注"],
         )
 
+    def test_relationship_manager_is_masked_and_cannot_view_internal_comment(
+        self,
+    ) -> None:
+        result = secure_result(
+            columns=[
+                "客户姓名",
+                "手机号",
+                "内部备注",
+            ],
+            rows=[
+                [
+                    "演示客户甲",
+                    "13800000001",
+                    "内部维护记录",
+                ]
+            ],
+            principal=principal(
+                role="relationship_manager",
+                profile="standard",
+            ),
+        )
+
+        self.assertEqual(
+            result.columns,
+            ["客户姓名", "手机号"],
+        )
+        self.assertEqual(
+            result.rows,
+            [["演****", "138****0001"]],
+        )
+        self.assertEqual(
+            result.removed_columns,
+            ["内部备注"],
+        )
+
     def test_admin_can_view_internal_comment(
         self,
     ) -> None:

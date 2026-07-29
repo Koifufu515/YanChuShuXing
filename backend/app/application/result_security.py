@@ -106,6 +106,7 @@ ANALYST_ROLES = frozenset(
     {
         "province_analyst",
         "institution_analyst",
+        "relationship_manager",
     }
 )
 

@@ -18,3 +18,4 @@ class SecurityPrincipal:
     allowed_institution_ids: frozenset[str] | None
     masking_profile: str
     authenticated: bool
+    allowed_rm_ids: frozenset[str] | None = None

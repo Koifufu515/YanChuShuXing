@@ -12,6 +12,7 @@ VALID_ROLES = {
     "admin",
     "province_analyst",
     "institution_analyst",
+    "relationship_manager",
     "auditor",
 }
 
@@ -121,6 +122,36 @@ class TokenAuthenticator:
                     "机构范围必须是数组或字符串*。"
                 )
 
+            raw_rm_scope = item.get(
+                "allowed_rm_ids"
+            )
+
+            if raw_rm_scope is None:
+                rm_scope = None
+            elif raw_rm_scope == "*":
+                rm_scope = frozenset({"*"})
+            elif isinstance(raw_rm_scope, list):
+                rm_scope = frozenset(
+                    str(value).strip()
+                    for value in raw_rm_scope
+                    if str(value).strip()
+                )
+            else:
+                raise AuthenticationConfigurationError(
+                    "客户经理行级范围必须是数组、字符串*或空值。"
+                )
+
+            if (
+                role == "relationship_manager"
+                and (
+                    not rm_scope
+                    or "*" in rm_scope
+                )
+            ):
+                raise AuthenticationConfigurationError(
+                    "客户经理角色必须配置具体的allowed_rm_ids。"
+                )
+
             principals[token] = SecurityPrincipal(
                 subject_id=subject_id,
                 display_name=display_name,
@@ -133,6 +164,7 @@ class TokenAuthenticator:
                     )
                 ).strip(),
                 authenticated=True,
+                allowed_rm_ids=rm_scope,
             )
 
         if required and not principals:
