@@ -2318,20 +2318,72 @@ class DeterministicQueryPlanExecutor:
     ) -> ExecutionValue:
         if len(inputs) < 2:
             raise QueryExecutionError("OP005 至少需要总量和一个分项输入。")
+
         total, total_unit = self._single_numeric(inputs[0])
         components: list[Decimal] = []
         component_units: list[str | None] = []
+        component_details: list[dict[str, Any]] = []
+
+        total_label: str | None = None
+        if inputs[0].kind == "records":
+            total_records = self._records(inputs[0])
+            if len(total_records) == 1:
+                raw_label = total_records[0].get("metric_name")
+                if isinstance(raw_label, str):
+                    total_label = raw_label
+
         for value in inputs[1:]:
             numeric, unit = self._single_numeric(value)
             components.append(numeric)
             component_units.append(unit)
-        self._require_same_unit([total_unit, *component_units], "OP005")
+
+            source_records: list[dict[str, Any]] = []
+            if value.kind == "records":
+                records = self._records(value)
+                if len(records) == 1:
+                    source_records = records
+            elif (
+                value.kind == "scalar"
+                and value.data.get("operation") == "sum"
+            ):
+                source_records = [
+                    record
+                    for key in ("left_record", "right_record")
+                    if isinstance(
+                        record := value.data.get(key),
+                        dict,
+                    )
+                ]
+
+            for record in source_records:
+                name = record.get("metric_name")
+                raw_value = record.get("value")
+                raw_unit = record.get("unit") or unit
+                if (
+                    isinstance(name, str)
+                    and raw_value is not None
+                ):
+                    component_details.append(
+                        {
+                            "metric_name": name,
+                            "value": raw_value,
+                            "unit": raw_unit,
+                        }
+                    )
+
+        self._require_same_unit(
+            [total_unit, *component_units],
+            "OP005",
+        )
         component_sum = sum(components, Decimal(0))
         difference = total - component_sum
+
         return ExecutionValue(
             kind="reconciliation",
             data={
+                "total_label": total_label,
                 "total_value": total,
+                "component_details": component_details,
                 "component_sum": component_sum,
                 "difference": difference,
                 "is_equal": difference == 0,
@@ -3682,10 +3734,55 @@ class DeterministicQueryPlanExecutor:
                 self._json_number(data.get("difference"), digits),
                 value.unit,
             ]
-            summary = (
-                f"总量与分项合计{'一致' if row[2] else '不一致'}，"
-                f"差额为{row[3]}{value.unit or ''}。"
+            details = data.get("component_details")
+            details = (
+                details
+                if isinstance(details, list)
+                else []
             )
+            valid_details = [
+                item
+                for item in details
+                if isinstance(item, dict)
+                and isinstance(
+                    item.get("metric_name"),
+                    str,
+                )
+                and item.get("value") is not None
+            ]
+
+            if valid_details:
+                component_text = " + ".join(
+                    f"{item['metric_name']}"
+                    f"{self._display_number(item['value'], digits)}"
+                    f"{item.get('unit') or value.unit or ''}"
+                    for item in valid_details
+                )
+                total_label = (
+                    data.get("total_label")
+                    if isinstance(
+                        data.get("total_label"),
+                        str,
+                    )
+                    else "总量"
+                )
+                summary = (
+                    f"{component_text} = "
+                    f"{self._display_number(data.get('component_sum'), digits)}"
+                    f"{value.unit or ''}；"
+                    f"{total_label}"
+                    f"{self._display_number(data.get('total_value'), digits)}"
+                    f"{value.unit or ''}；"
+                    f"总量与分项合计"
+                    f"{'一致' if row[2] else '不一致'}，"
+                    f"差额为{row[3]}{value.unit or ''}。"
+                )
+            else:
+                summary = (
+                    f"总量与分项合计"
+                    f"{'一致' if row[2] else '不一致'}，"
+                    f"差额为{row[3]}{value.unit or ''}。"
+                )
             return (
                 ["total_value", "component_sum", "is_equal", "difference", "unit"],
                 [row],
