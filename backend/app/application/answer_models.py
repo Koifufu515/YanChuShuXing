@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+
 JsonScalar = str | int | float | bool | None
 
 
@@ -32,6 +33,54 @@ class BenchmarkComparisonFacts:
     relative_position: str
     performance_assessment: str
     answer_type: str = "benchmark_comparison"
+
+
+@dataclass(frozen=True)
+class MainMetricFact:
+    metric_id: str
+    metric_name: str
+    value: JsonScalar
+    unit: str
+    rank: int
+    performance_direction: str | None
+    performance_band: str
+
+
+@dataclass(frozen=True)
+class MainMetricsOverviewFacts:
+    subject: InstitutionRef
+    period: str
+    metrics: list[MainMetricFact]
+    answer_type: str = "main_metrics_overview"
+
+
+@dataclass(frozen=True)
+class TrendPoint:
+    data_date: str
+    value: JsonScalar
+
+
+@dataclass(frozen=True)
+class TrendSeries:
+    institution: InstitutionRef
+    metric: MetricRef
+    points: list[TrendPoint]
+
+
+@dataclass(frozen=True)
+class TrendOverviewFacts:
+    start_date: str
+    end_date: str
+    grain: str
+    series: list[TrendSeries]
+    answer_type: str = "trend"
+
+
+AnalysisFacts = (
+    BenchmarkComparisonFacts
+    | MainMetricsOverviewFacts
+    | TrendOverviewFacts
+)
 
 
 @dataclass(frozen=True)
@@ -67,6 +116,8 @@ class AnswerPayload:
     answer_type: str
     headline: str
     summary: str
-    key_metrics: list[KeyMetric] = field(default_factory=list)
+    key_metrics: list[KeyMetric] = field(
+        default_factory=list
+    )
     table: AnswerTable | None = None
     chart_spec: ChartSpec | None = None

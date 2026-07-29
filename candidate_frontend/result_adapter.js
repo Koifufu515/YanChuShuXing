@@ -10,9 +10,79 @@
   });
 
   const ANSWER_TYPE_LABELS = Object.freeze({
+    trend: "趋势",
     benchmark_comparison: "跨期比较",
+    main_metrics_overview: "综合分析",
     single_value: "单值",
   });
+
+  const COLUMN_LABELS = Object.freeze({
+    result: "结果",
+    metric_id: "指标编号",
+    metric_name: "指标",
+    metric_value: "指标值",
+    metric_unit: "单位",
+    institution_id: "机构编号",
+    institution_name: "机构",
+    data_date: "数据日期",
+    date: "日期",
+    base_date: "基期",
+    base_value: "基期值",
+    current_date: "本期",
+    current_value: "本期值",
+    start_date: "开始日期",
+    end_date: "结束日期",
+    change: "变动值",
+    difference: "差值",
+    difference_unit: "差值单位",
+    direction: "变动方向",
+    relative_position: "相对位置",
+    rank: "排名",
+    value: "数值",
+    count: "数量",
+    record_count: "记录数",
+    institution_count: "机构数",
+    benchmark_name: "比较基准",
+    benchmark_value: "基准值",
+    target_value: "目标值",
+    unit: "单位",
+  });
+
+  const HIDDEN_DISPLAY_FIELDS = new Set([
+    "result",
+    "operation",
+    "institution_id",
+    "metric_id",
+  ]);
+
+  function displayColumnName(value) {
+    const name = String(value || "");
+    return COLUMN_LABELS[name] || name.replaceAll("_", " ");
+  }
+
+  function displayTable(payload) {
+    const rawColumns = Array.isArray(payload?.columns)
+      ? payload.columns.map(String)
+      : [];
+    const rawRows = Array.isArray(payload?.rows)
+      ? payload.rows.filter(Array.isArray)
+      : [];
+
+    const visibleIndexes = rawColumns
+      .map((name, index) => ({ name, index }))
+      .filter(item => !HIDDEN_DISPLAY_FIELDS.has(item.name));
+
+    return {
+      columns: visibleIndexes.map(
+        item => displayColumnName(item.name)
+      ),
+      rows: rawRows.map(
+        row => visibleIndexes.map(
+          item => row[item.index]
+        )
+      ),
+    };
+  }
 
   function fieldIndexes(columns) {
     const names = Array.isArray(columns) ? columns.map(String) : [];
@@ -224,6 +294,9 @@
   global.YCSXResultAdapter = Object.freeze({
     REQUIRED_FIELDS,
     ANSWER_TYPE_LABELS,
+    COLUMN_LABELS,
+    displayColumnName,
+    displayTable,
     adapt,
     structuredAnswer,
     answerMetricText,

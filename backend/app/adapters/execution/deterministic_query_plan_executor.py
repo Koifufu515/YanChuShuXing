@@ -14,7 +14,12 @@ from app.application.errors import QueryExecutionError
 from app.application.answer_models import (
     BenchmarkComparisonFacts,
     InstitutionRef,
+    MainMetricFact,
+    MainMetricsOverviewFacts,
     MetricRef,
+    TrendOverviewFacts,
+    TrendPoint,
+    TrendSeries,
 )
 from app.application.models import JsonScalar, QueryPlanExecutionResult
 from app.ports.database_executor import DatabaseExecutor
@@ -114,10 +119,20 @@ class DeterministicQueryPlanExecutor:
             final_value,
             output_plan,
         )
-        analysis_facts = self._benchmark_comparison_facts(
+        analysis_facts = self._trend_overview_facts(
             query_plan,
             final_value,
         )
+        if analysis_facts is None:
+            analysis_facts = self._main_metrics_overview_facts(
+                query_plan,
+                context,
+            )
+        if analysis_facts is None:
+            analysis_facts = self._benchmark_comparison_facts(
+                query_plan,
+                final_value,
+            )
         return QueryPlanExecutionResult(
             columns=columns,
             rows=rows,
@@ -125,6 +140,452 @@ class DeterministicQueryPlanExecutor:
             warnings=[],
             execution_trace=trace,
             analysis_facts=analysis_facts,
+        )
+
+    @staticmethod
+    def _trend_overview_facts(
+        query_plan: dict[str, Any],
+        final_value: ExecutionValue,
+    ) -> TrendOverviewFacts | None:
+        if (
+            final_value.kind != "trend"
+            or not isinstance(final_value.data, dict)
+        ):
+            return None
+
+        raw_records = final_value.data.get("series")
+        if not isinstance(raw_records, list):
+            return None
+
+        records = [
+            item
+            for item in raw_records
+            if isinstance(item, dict)
+        ]
+        if not records:
+            return None
+
+        time_plan = query_plan.get("time")
+        time_plan = (
+            time_plan
+            if isinstance(time_plan, dict)
+            else {}
+        )
+
+        grain = time_plan.get("grain")
+        grain = (
+            grain
+            if isinstance(grain, str)
+            and grain
+            else "day"
+        )
+
+        performance_directions = {
+            "ZB001": "higher_is_better",
+            "ZB002": "higher_is_better",
+            "ZB011": "higher_is_better",
+            "ZB012": "lower_is_better",
+            "ZB013": "lower_is_better",
+            "ZB015": "higher_is_better",
+            "ZB016": "higher_is_better",
+            "ZB017": "lower_is_better",
+        }
+
+        grouped: dict[
+            tuple[str | None, str],
+            list[dict[str, Any]],
+        ] = defaultdict(list)
+
+        all_dates: list[str] = []
+
+        for record in records:
+            institution_id = record.get(
+                "institution_id"
+            )
+            institution_name = record.get(
+                "institution_name"
+            )
+            metric_id = record.get("metric_id")
+            metric_name = record.get("metric_name")
+            unit = record.get("unit")
+            data_date = record.get("date")
+            value = record.get("value")
+
+            if (
+                institution_id is not None
+                and not isinstance(
+                    institution_id,
+                    str,
+                )
+            ):
+                return None
+
+            if not all(
+                isinstance(item, str)
+                and item
+                for item in (
+                    institution_name,
+                    metric_id,
+                    metric_name,
+                    unit,
+                    data_date,
+                )
+            ):
+                return None
+
+            if value is None:
+                return None
+
+            try:
+                date.fromisoformat(data_date)
+            except ValueError:
+                return None
+
+            grouped[
+                (institution_id, metric_id)
+            ].append(record)
+            all_dates.append(data_date)
+
+        if not grouped or not all_dates:
+            return None
+
+        start_date = time_plan.get("start_date")
+        if not isinstance(start_date, str):
+            start_date = min(all_dates)
+
+        end_date = time_plan.get("end_date")
+        if not isinstance(end_date, str):
+            end_date = max(all_dates)
+
+        try:
+            parsed_start = date.fromisoformat(
+                start_date
+            )
+            parsed_end = date.fromisoformat(
+                end_date
+            )
+        except ValueError:
+            return None
+
+        if parsed_start > parsed_end:
+            return None
+
+        trend_series: list[TrendSeries] = []
+
+        for (
+            institution_id,
+            metric_id,
+        ), group in sorted(
+            grouped.items(),
+            key=lambda item: (
+                str(item[0][0] or ""),
+                item[0][1],
+            ),
+        ):
+            institution_names = {
+                str(item["institution_name"])
+                for item in group
+            }
+            metric_names = {
+                str(item["metric_name"])
+                for item in group
+            }
+            units = {
+                str(item["unit"])
+                for item in group
+            }
+
+            if (
+                len(institution_names) != 1
+                or len(metric_names) != 1
+                or len(units) != 1
+            ):
+                return None
+
+            ordered = sorted(
+                group,
+                key=lambda item: str(
+                    item["date"]
+                ),
+            )
+
+            point_dates = [
+                str(item["date"])
+                for item in ordered
+            ]
+            if len(point_dates) != len(
+                set(point_dates)
+            ):
+                return None
+
+            points = [
+                TrendPoint(
+                    data_date=str(item["date"]),
+                    value=(
+                        DeterministicQueryPlanExecutor
+                        ._json_scalar(item["value"])
+                    ),
+                )
+                for item in ordered
+            ]
+
+            trend_series.append(
+                TrendSeries(
+                    institution=InstitutionRef(
+                        institution_id=(
+                            institution_id
+                        ),
+                        institution_name=next(
+                            iter(
+                                institution_names
+                            )
+                        ),
+                    ),
+                    metric=MetricRef(
+                        metric_id=metric_id,
+                        metric_name=next(
+                            iter(metric_names)
+                        ),
+                        unit=next(iter(units)),
+                        performance_direction=(
+                            performance_directions.get(
+                                metric_id,
+                                "not_applicable",
+                            )
+                        ),
+                    ),
+                    points=points,
+                )
+            )
+
+        return TrendOverviewFacts(
+            start_date=start_date,
+            end_date=end_date,
+            grain=grain,
+            series=trend_series,
+        )
+
+    @staticmethod
+    def _main_metrics_overview_facts(
+        query_plan: dict[str, Any],
+        context: dict[str, ExecutionValue],
+    ) -> MainMetricsOverviewFacts | None:
+        metrics_plan = query_plan.get("metrics")
+        if not isinstance(metrics_plan, dict):
+            return None
+
+        concept_ids = metrics_plan.get("concept_ids")
+        if not isinstance(concept_ids, list):
+            return None
+
+        required_concepts = {
+            "BC001",
+            "BC002",
+            "BC003",
+        }
+        if not required_concepts.issubset(
+            {
+                value
+                for value in concept_ids
+                if isinstance(value, str)
+            }
+        ):
+            return None
+
+        expected_metric_ids = [
+            "ZB001",
+            "ZB002",
+            "ZB022",
+            "ZB013",
+            "ZB015",
+            "ZB016",
+            "ZB017",
+            "ZB011",
+            "ZB012",
+        ]
+        if (
+            metrics_plan.get("requested_metric_ids")
+            != expected_metric_ids
+        ):
+            return None
+
+        institutions = query_plan.get("institutions")
+        targets = (
+            institutions.get("targets")
+            if isinstance(institutions, dict)
+            else None
+        )
+        if not isinstance(targets, list) or len(targets) != 1:
+            return None
+
+        target = targets[0]
+        target_id = (
+            target.get("institution_id")
+            if isinstance(target, dict)
+            else None
+        )
+        if not isinstance(target_id, str):
+            return None
+
+        time_plan = query_plan.get("time")
+        dates = (
+            time_plan.get("dates")
+            if isinstance(time_plan, dict)
+            else None
+        )
+        if (
+            not isinstance(dates, list)
+            or len(dates) != 1
+            or not isinstance(dates[0], str)
+        ):
+            return None
+        period = dates[0]
+
+        performance_directions = {
+            "ZB001": "higher_is_better",
+            "ZB002": "higher_is_better",
+            "ZB013": "lower_is_better",
+            "ZB015": "higher_is_better",
+            "ZB016": "higher_is_better",
+            "ZB017": "lower_is_better",
+            "ZB011": "higher_is_better",
+            "ZB012": "lower_is_better",
+        }
+
+        def records_for(
+            output_ref: str,
+        ) -> list[dict[str, Any]] | None:
+            value = context.get(output_ref)
+            if (
+                not isinstance(value, ExecutionValue)
+                or value.kind != "records"
+                or not isinstance(value.data, list)
+            ):
+                return None
+            return [
+                item
+                for item in value.data
+                if isinstance(item, dict)
+            ]
+
+        metric_facts: list[MainMetricFact] = []
+        institution_name: str | None = None
+
+        for metric_id in expected_metric_ids:
+            metric_key = metric_id.lower()
+            rank_ref = (
+                "zb022_numeric_rank"
+                if metric_id == "ZB022"
+                else f"{metric_key}_performance_rank"
+            )
+            ranked_records = records_for(rank_ref)
+            if ranked_records is None:
+                return None
+
+            target_records = [
+                item
+                for item in ranked_records
+                if item.get("institution_id") == target_id
+            ]
+            if len(target_records) != 1:
+                return None
+
+            record = target_records[0]
+            required_values = (
+                record.get("institution_name"),
+                record.get("metric_name"),
+                record.get("unit"),
+                record.get("value"),
+                record.get("rank"),
+                record.get("date"),
+            )
+            if any(value is None for value in required_values):
+                return None
+
+            if record.get("date") != period:
+                return None
+
+            rank = record.get("rank")
+            if (
+                isinstance(rank, bool)
+                or not isinstance(rank, int)
+            ):
+                return None
+
+            current_name = record.get("institution_name")
+            if not isinstance(current_name, str):
+                return None
+            if institution_name is None:
+                institution_name = current_name
+            elif institution_name != current_name:
+                return None
+
+            performance_direction = (
+                performance_directions.get(metric_id)
+            )
+
+            if metric_id == "ZB022":
+                performance_band = "numeric_only"
+            else:
+                top_records = records_for(
+                    f"{metric_key}_top3"
+                )
+                bottom_records = records_for(
+                    f"{metric_key}_bottom4"
+                )
+                if (
+                    top_records is None
+                    or bottom_records is None
+                ):
+                    return None
+
+                in_top = any(
+                    item.get("institution_id") == target_id
+                    for item in top_records
+                )
+                in_bottom = any(
+                    item.get("institution_id") == target_id
+                    for item in bottom_records
+                )
+
+                if in_top and in_bottom:
+                    performance_band = "boundary_tie"
+                elif in_top:
+                    performance_band = "better"
+                elif in_bottom:
+                    performance_band = "worse"
+                else:
+                    performance_band = "middle"
+
+            metric_facts.append(
+                MainMetricFact(
+                    metric_id=metric_id,
+                    metric_name=str(
+                        record["metric_name"]
+                    ),
+                    value=(
+                        DeterministicQueryPlanExecutor
+                        ._json_scalar(record["value"])
+                    ),
+                    unit=str(record["unit"]),
+                    rank=rank,
+                    performance_direction=(
+                        performance_direction
+                    ),
+                    performance_band=performance_band,
+                )
+            )
+
+        if institution_name is None:
+            return None
+
+        return MainMetricsOverviewFacts(
+            subject=InstitutionRef(
+                institution_id=target_id,
+                institution_name=institution_name,
+            ),
+            period=period,
+            metrics=metric_facts,
         )
 
     @staticmethod

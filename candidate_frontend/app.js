@@ -101,11 +101,40 @@
   function buildView(payload) {
     const structured = adapter.structuredAnswer(payload);
     const resultType = structured?.resultType || inferResultType(payload || {});
-    const columns = structured?.table?.columns || (Array.isArray(payload?.columns) ? payload.columns.map(String) : []);
-    const rows = structured?.table?.rows || (Array.isArray(payload?.rows) ? payload.rows.filter(Array.isArray) : []);
-    let chart = structured?.chartSpec?.chart_type || payload?.metadata?.chart_type || state.contract.result_types[resultType]?.chart || "none";
+    const legacyTable = adapter.displayTable(payload);
+    const columns = structured?.table?.columns || legacyTable.columns;
+    const rows = structured?.table?.rows || legacyTable.rows;
+    let chart;
+    if (structured) {
+      chart = structured.chartSpec?.chart_type || "none";
+    } else {
+      chart = payload?.metadata?.chart_type || state.contract.result_types[resultType]?.chart || "none";
+    }
     if (!columns.length || !rows.length) chart = "none";
-    if (structured?.chartSpec) chart = structured.chartSpec.chart_type;
+
+    if (!structured) {
+      const unitIndex = columns.findIndex(
+        column => column === "单位" || column === "unit"
+      );
+
+      if (unitIndex >= 0) {
+        const distinctUnits = new Set(
+          rows
+            .map(row => row[unitIndex])
+            .filter(
+              unit =>
+                unit !== null
+                && unit !== undefined
+                && String(unit).trim() !== ""
+            )
+            .map(unit => String(unit))
+        );
+
+        if (distinctUnits.size > 1) {
+          chart = "none";
+        }
+      }
+    }
     return { resultType, chart, columns, rows, summary: structured?.summary || payload?.summary || "当前结果暂无可用结论。", structured, model: adapter.adapt(payload) };
   }
 
@@ -217,15 +246,21 @@
       if(payload.confirmation?.status==="confirmed") { const final=node("section","final-conditions");final.append(node("strong","","最终采用条件"),node("span","",finalConditionsText(payload.confirmation)));body.append(final); }
       if (view.structured?.headline) body.append(node("h3", "answer-headline", view.structured.headline));
       body.append(node("p", "answer-summary", view.summary));
+      const chart = makeChart(view);
+      const chartFirst = (
+        view.structured?.answerType === "trend"
+      );
+      if (chartFirst && chart) {
+        body.append(chart);
+      }
       if (view.structured?.keyMetrics.length) {
         const grid=node("div","kpi-grid");
         view.structured.keyMetrics.forEach(metric=>{const item=node("div","kpi");item.append(node("span","",metric.label||"指标值"));item.append(node("strong","",adapter.answerMetricText(metric)));grid.append(item);});
         body.append(grid);
       } else if (view.resultType === "单值") { const single=adapter.singleValue(view.model); if(single){ const grid=node("div","kpi-grid"); const item=node("div","kpi"); item.append(node("span","",single.metricName)); item.append(node("strong","",single.valueText)); grid.append(item); body.append(grid); } }
-      const chart = makeChart(view);
       if (view.structured) {
         if (view.rows.length) body.append(makeTable(view));
-        if (chart) body.append(chart);
+        if (chart && !chartFirst) body.append(chart);
         if (!view.rows.length && !chart) body.append(node("p", "", "本次查询没有返回数据明细。"));
       } else {
         if (chart) body.append(chart);

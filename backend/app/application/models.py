@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.application.answer_models import AnswerPayload, BenchmarkComparisonFacts
+from app.application.answer_models import (
+    AnalysisFacts,
+    AnswerPayload,
+)
 
 
 JsonScalar = str | int | float | bool | None
@@ -174,7 +177,7 @@ class QueryPlanExecutionResult:
     summary: str | None
     warnings: list[str] = field(default_factory=list)
     execution_trace: list[dict[str, Any]] = field(default_factory=list)
-    analysis_facts: BenchmarkComparisonFacts | None = None
+    analysis_facts: AnalysisFacts | None = None
 
 
 @dataclass(frozen=True)
