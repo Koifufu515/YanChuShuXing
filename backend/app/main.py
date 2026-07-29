@@ -19,6 +19,7 @@ app = FastAPI(
 )
 app.include_router(query_router)
 app.include_router(security_alert_router)
+app.include_router(permission_demo_router)
 register_error_handlers(app)
 configure_dependencies(app)
 

@@ -281,3 +281,7 @@ def configure_dependencies(app: Any) -> None:
     app.dependency_overrides[
         api_get_security_alert_reader
     ] = get_security_alert_reader
+
+    app.dependency_overrides[
+        api_get_permission_demo_executor
+    ] = get_permission_demo_executor
