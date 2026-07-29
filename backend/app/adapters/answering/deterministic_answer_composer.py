@@ -15,6 +15,7 @@ from app.application.answer_models import (
     MainMetricsOverviewFacts,
     TrendOverviewFacts,
     RankingOverviewFacts,
+    DirectMetricValuesFacts,
 )
 
 
@@ -45,6 +46,14 @@ class DeterministicAnswerComposer:
             RankingOverviewFacts,
         ):
             return self._compose_ranking(facts)
+
+        if isinstance(
+            facts,
+            DirectMetricValuesFacts,
+        ):
+            return self._compose_direct_metric_values(
+                facts
+            )
 
         if isinstance(
             facts,
@@ -505,6 +514,84 @@ class DeterministicAnswerComposer:
             return "绩效排名"
 
         return "排名"
+
+    def _compose_direct_metric_values(
+        self,
+        facts: DirectMetricValuesFacts,
+    ) -> AnswerPayload:
+        if not facts.metrics:
+            raise ValueError(
+                "直接指标值事实至少需要一个指标。"
+            )
+
+        metric_ids = [
+            metric.metric_id
+            for metric in facts.metrics
+        ]
+
+        if len(metric_ids) != len(
+            set(metric_ids)
+        ):
+            raise ValueError(
+                "直接指标值事实包含重复指标。"
+            )
+
+        subject = (
+            facts.subject.institution_name
+        )
+
+        value_parts = [
+            (
+                f"{metric.metric_name}为"
+                f"{self._display_number(metric.value)}"
+                f"{metric.unit}"
+            )
+            for metric in facts.metrics
+        ]
+
+        if len(facts.metrics) == 1:
+            headline = (
+                f"{subject}"
+                f"{facts.metrics[0].metric_name}"
+            )
+        else:
+            headline = (
+                f"{subject}"
+                f"{len(facts.metrics)}项指标值"
+            )
+
+        summary = (
+            f"截至 "
+            f"{self._display_period(facts.period)}，"
+            f"{subject}的"
+            + "、".join(value_parts)
+            + "。"
+        )
+
+        return AnswerPayload(
+            answer_type=facts.answer_type,
+            headline=headline,
+            summary=summary,
+            key_metrics=[],
+            table=AnswerTable(
+                columns=[
+                    "指标",
+                    "数值",
+                    "单位",
+                ],
+                rows=[
+                    [
+                        metric.metric_name,
+                        self._display_number(
+                            metric.value
+                        ),
+                        metric.unit,
+                    ]
+                    for metric in facts.metrics
+                ],
+            ),
+            chart_spec=None,
+        )
 
     def _compose_benchmark(
         self,

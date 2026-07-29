@@ -100,11 +100,28 @@ class RankingOverviewFacts:
     answer_type: str = "ranking"
 
 
+@dataclass(frozen=True)
+class DirectMetricValueFact:
+    metric_id: str
+    metric_name: str
+    value: JsonScalar
+    unit: str
+
+
+@dataclass(frozen=True)
+class DirectMetricValuesFacts:
+    subject: InstitutionRef
+    period: str
+    metrics: list[DirectMetricValueFact]
+    answer_type: str = "direct_metric_values"
+
+
 AnalysisFacts = (
     BenchmarkComparisonFacts
     | MainMetricsOverviewFacts
     | TrendOverviewFacts
     | RankingOverviewFacts
+    | DirectMetricValuesFacts
 )
 
 

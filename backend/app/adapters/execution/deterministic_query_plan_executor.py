@@ -23,6 +23,8 @@ from app.application.answer_models import (
     MetricRankingFacts,
     RankingItem,
     RankingOverviewFacts,
+    DirectMetricValueFact,
+    DirectMetricValuesFacts,
 )
 from app.application.models import JsonScalar, QueryPlanExecutionResult
 from app.ports.database_executor import DatabaseExecutor
@@ -133,6 +135,11 @@ class DeterministicQueryPlanExecutor:
             )
         if analysis_facts is None:
             analysis_facts = self._ranking_overview_facts(
+                query_plan,
+                context,
+            )
+        if analysis_facts is None:
+            analysis_facts = self._direct_metric_values_facts(
                 query_plan,
                 context,
             )
@@ -1212,6 +1219,366 @@ class DeterministicQueryPlanExecutor:
             rankings=rankings,
             selection_mode=selection_mode,
             requested_n=requested_n,
+        )
+
+    @staticmethod
+    def _direct_metric_values_facts(
+        query_plan: dict[str, Any],
+        context: dict[str, ExecutionValue],
+    ) -> DirectMetricValuesFacts | None:
+        operations = query_plan.get("operations")
+        if (
+            not isinstance(operations, list)
+            or not operations
+        ):
+            return None
+
+        producers: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        for operation in operations:
+            if not isinstance(operation, dict):
+                return None
+
+            output_ref = operation.get("output_ref")
+            operator_id = operation.get(
+                "operator_id"
+            )
+
+            if (
+                not isinstance(output_ref, str)
+                or not isinstance(
+                    operator_id,
+                    str,
+                )
+                or output_ref in producers
+            ):
+                return None
+
+            producers[output_ref] = operation
+
+        final_operation = operations[-1]
+        final_operator = final_operation.get(
+            "operator_id"
+        )
+        final_ref = final_operation.get(
+            "output_ref"
+        )
+
+        if not isinstance(final_ref, str):
+            return None
+
+        if final_operator == "OP001":
+            if len(operations) != 1:
+                return None
+
+            selected_refs = [final_ref]
+
+        elif final_operator == "OP019":
+            input_refs = final_operation.get(
+                "input_refs"
+            )
+
+            if (
+                not isinstance(input_refs, list)
+                or len(input_refs) < 2
+                or not all(
+                    isinstance(ref, str)
+                    for ref in input_refs
+                )
+                or len(input_refs)
+                != len(set(input_refs))
+            ):
+                return None
+
+            direct_operations = operations[:-1]
+
+            if any(
+                operation.get("operator_id")
+                != "OP001"
+                for operation
+                in direct_operations
+            ):
+                return None
+
+            direct_output_refs = [
+                operation.get("output_ref")
+                for operation
+                in direct_operations
+            ]
+
+            if (
+                not all(
+                    isinstance(ref, str)
+                    for ref
+                    in direct_output_refs
+                )
+                or len(direct_output_refs)
+                != len(input_refs)
+                or set(direct_output_refs)
+                != set(input_refs)
+            ):
+                return None
+
+            selected_refs = list(input_refs)
+
+        else:
+            return None
+
+        metrics_plan = query_plan.get("metrics")
+        if not isinstance(metrics_plan, dict):
+            return None
+
+        requested_metric_ids = (
+            metrics_plan.get(
+                "requested_metric_ids"
+            )
+        )
+        source_metric_ids = metrics_plan.get(
+            "source_metric_ids"
+        )
+
+        if (
+            not isinstance(
+                requested_metric_ids,
+                list,
+            )
+            or not requested_metric_ids
+            or not all(
+                isinstance(metric_id, str)
+                for metric_id
+                in requested_metric_ids
+            )
+            or len(requested_metric_ids)
+            != len(set(requested_metric_ids))
+            or not isinstance(
+                source_metric_ids,
+                list,
+            )
+            or not all(
+                isinstance(metric_id, str)
+                for metric_id
+                in source_metric_ids
+            )
+            or len(source_metric_ids)
+            != len(set(source_metric_ids))
+            or set(requested_metric_ids)
+            != set(source_metric_ids)
+        ):
+            return None
+
+        institutions_plan = query_plan.get(
+            "institutions"
+        )
+        targets = (
+            institutions_plan.get("targets")
+            if isinstance(
+                institutions_plan,
+                dict,
+            )
+            else None
+        )
+
+        if (
+            not isinstance(targets, list)
+            or len(targets) != 1
+            or not isinstance(targets[0], dict)
+        ):
+            return None
+
+        planned_target_id = targets[0].get(
+            "institution_id"
+        )
+
+        if not isinstance(
+            planned_target_id,
+            str,
+        ):
+            return None
+
+        records_by_metric: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        institution_ids: set[str] = set()
+        institution_names: set[str] = set()
+        dates: set[str] = set()
+
+        for output_ref in selected_refs:
+            operation = producers.get(output_ref)
+
+            if (
+                not isinstance(operation, dict)
+                or operation.get("operator_id")
+                != "OP001"
+            ):
+                return None
+
+            input_refs = operation.get(
+                "input_refs"
+            )
+            parameters = operation.get(
+                "parameters"
+            )
+
+            if (
+                not isinstance(input_refs, list)
+                or len(input_refs) != 1
+                or not isinstance(
+                    input_refs[0],
+                    str,
+                )
+                or not isinstance(
+                    parameters,
+                    dict,
+                )
+                or not isinstance(
+                    parameters.get("date"),
+                    str,
+                )
+            ):
+                return None
+
+            planned_metric_id = input_refs[0]
+            planned_date = parameters["date"]
+
+            if parameters.get(
+                "institution_id"
+            ) != planned_target_id:
+                return None
+
+            value = context.get(output_ref)
+
+            if (
+                not isinstance(
+                    value,
+                    ExecutionValue,
+                )
+                or value.kind != "records"
+                or not isinstance(
+                    value.data,
+                    list,
+                )
+                or len(value.data) != 1
+                or not isinstance(
+                    value.data[0],
+                    dict,
+                )
+            ):
+                return None
+
+            record = value.data[0]
+
+            institution_id = record.get(
+                "institution_id"
+            )
+            institution_name = record.get(
+                "institution_name"
+            )
+            data_date = record.get("date")
+            metric_id = record.get("metric_id")
+            metric_name = record.get(
+                "metric_name"
+            )
+            unit = record.get("unit")
+            metric_value = record.get("value")
+
+            if (
+                not isinstance(
+                    institution_id,
+                    str,
+                )
+                or not isinstance(
+                    institution_name,
+                    str,
+                )
+                or not isinstance(
+                    data_date,
+                    str,
+                )
+                or not isinstance(metric_id, str)
+                or not isinstance(
+                    metric_name,
+                    str,
+                )
+                or not isinstance(unit, str)
+                or metric_value is None
+                or institution_id
+                != planned_target_id
+                or data_date != planned_date
+                or metric_id
+                != planned_metric_id
+                or metric_id
+                not in requested_metric_ids
+                or metric_id
+                in records_by_metric
+            ):
+                return None
+
+            institution_ids.add(
+                institution_id
+            )
+            institution_names.add(
+                institution_name
+            )
+            dates.add(data_date)
+            records_by_metric[
+                metric_id
+            ] = record
+
+        if (
+            set(records_by_metric)
+            != set(requested_metric_ids)
+            or len(institution_ids) != 1
+            or len(institution_names) != 1
+            or len(dates) != 1
+        ):
+            return None
+
+        institution_id = next(
+            iter(institution_ids)
+        )
+        institution_name = next(
+            iter(institution_names)
+        )
+        period = next(iter(dates))
+
+        return DirectMetricValuesFacts(
+            subject=InstitutionRef(
+                institution_id=institution_id,
+                institution_name=(
+                    institution_name
+                ),
+            ),
+            period=period,
+            metrics=[
+                DirectMetricValueFact(
+                    metric_id=metric_id,
+                    metric_name=str(
+                        records_by_metric[
+                            metric_id
+                        ]["metric_name"]
+                    ),
+                    value=(
+                        DeterministicQueryPlanExecutor
+                        ._json_scalar(
+                            records_by_metric[
+                                metric_id
+                            ]["value"]
+                        )
+                    ),
+                    unit=str(
+                        records_by_metric[
+                            metric_id
+                        ]["unit"]
+                    ),
+                )
+                for metric_id
+                in requested_metric_ids
+            ],
         )
 
     @staticmethod

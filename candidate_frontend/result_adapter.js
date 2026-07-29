@@ -10,6 +10,7 @@
   });
 
   const ANSWER_TYPE_LABELS = Object.freeze({
+    direct_metric_values: "指标值",
     trend: "趋势",
     ranking: "排名",
     benchmark_comparison: "跨期比较",
