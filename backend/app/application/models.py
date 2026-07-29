@@ -7,6 +7,9 @@ from app.application.answer_models import (
     AnalysisFacts,
     AnswerPayload,
 )
+from app.application.security_models import (
+    SecurityPrincipal,
+)
 
 
 JsonScalar = str | int | float | bool | None
@@ -18,6 +21,7 @@ class QueryCommand:
     user_id: str
     conversation_id: str | None
     request_id: str
+    security_principal: SecurityPrincipal | None = None
 
 
 @dataclass(frozen=True)

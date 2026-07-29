@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.adapters.security.institution_scope import (
+    require_institution_access,
+)
 from app.application.errors import ApplicationError
 from app.application.models import (
     AuditEvent,
@@ -70,7 +73,15 @@ class PlannedQueryPipeline:
                     metadata=metadata,
                 )
 
-            execution = self.query_plan_executor.execute(plan_result.query_plan)
+            if command.security_principal is not None:
+                require_institution_access(
+                    plan_result.query_plan,
+                    command.security_principal,
+                )
+
+            execution = self.query_plan_executor.execute(
+                plan_result.query_plan
+            )
             answer = (
                 self.answer_composer.compose(
                     command.question,
