@@ -8,6 +8,8 @@
   const adapter = window.YCSXResultAdapter;
   const chartInstances = new Set();
   const state = { contract: null, conversations: [], activeId: null, selectedTurn: null, page: "chat", busy: false, suggestions: [] };
+  let drawerReturnFocus = null;
+  let toastTimer = null;
 
   window.addEventListener("resize", () => chartInstances.forEach(chart => chart.resize()));
 
@@ -25,6 +27,42 @@
     return String(value);
   }
 
+  function csvEscape(value) {
+    const text = value === null || value === undefined ? "" : String(value);
+    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  }
+
+  function buildCsv(columns, rows) {
+    const lines = [columns, ...rows].map(row => row.map(csvEscape).join(","));
+    return `\uFEFF${lines.join("\r\n")}`;
+  }
+
+  function safeFileStem(value) {
+    const normalized = String(value || "分析结果")
+      .replace(/[\\/:*?"<>|：？]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 28);
+    return normalized || "分析结果";
+  }
+
+  function exportFilename(question, date = new Date()) {
+    const pad = value => String(value).padStart(2, "0");
+    const stamp = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+    return `${safeFileStem(question)}-${stamp}.csv`;
+  }
+
+  function analysisCopyText(turn, view) {
+    const payload = turn?.payload || {};
+    const headline = view?.structured?.headline || "分析结论";
+    const lines = [headline, view?.summary || payload.summary || ""];
+    if (turn?.createdAt) lines.push(`查询时间：${new Date(turn.createdAt).toLocaleString("zh-CN")}`);
+    if (payload.request_id) lines.push(`请求编号：${payload.request_id}`);
+    return lines.filter(Boolean).join("\n");
+  }
+
+  window.YCSXCandidateUtils = Object.freeze({ csvEscape, buildCsv, safeFileStem, exportFilename, analysisCopyText });
+
   function loadConversations() {
     try {
       const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
@@ -39,6 +77,33 @@
   function persist() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.conversations.slice(0, 200)));
     if (state.activeId) localStorage.setItem(ACTIVE_KEY, state.activeId);
+  }
+
+  function showToast(message) {
+    const toast = $("#toast");
+    if (!toast) return;
+    clearTimeout(toastTimer);
+    toast.textContent = message;
+    toast.classList.add("visible");
+    toastTimer = setTimeout(() => toast.classList.remove("visible"), 1800);
+  }
+
+  function closeDrawers(restoreFocus = true) {
+    document.body.classList.remove("conversation-open", "detail-open", "drawer-open");
+    $("#open-conversations")?.setAttribute("aria-expanded", "false");
+    $("#open-details")?.setAttribute("aria-expanded", "false");
+    if (restoreFocus && drawerReturnFocus && typeof drawerReturnFocus.focus === "function") drawerReturnFocus.focus();
+    drawerReturnFocus = null;
+  }
+
+  function openDrawer(kind, trigger) {
+    closeDrawers(false);
+    drawerReturnFocus = trigger || document.activeElement;
+    document.body.classList.add(`${kind}-open`, "drawer-open");
+    const triggerSelector = kind === "conversation" ? "#open-conversations" : "#open-details";
+    const drawerSelector = kind === "conversation" ? "#conversation-drawer" : "#detail-drawer";
+    $(triggerSelector)?.setAttribute("aria-expanded", "true");
+    requestAnimationFrame(() => $(drawerSelector)?.querySelector("button, input, [tabindex='0']")?.focus());
   }
 
   function activeConversation() { return state.conversations.find(item => item.id === state.activeId) || null; }
@@ -161,6 +226,58 @@
     table.append(tbody); wrap.append(table); return wrap;
   }
 
+  function makeResultActions(turn, view, index) {
+    const actions = node("div", "result-actions");
+    const copy = node("button", "result-action", "复制分析结论");
+    copy.type = "button";
+    copy.dataset.copyTurn = String(index);
+    const download = node("button", "result-action", "导出 CSV");
+    download.type = "button";
+    download.dataset.exportTurn = String(index);
+    download.disabled = !view.columns.length || !view.rows.length;
+    download.title = download.disabled ? "当前结果没有可导出的表格" : "导出当前回答展示的数据";
+    actions.append(copy, download);
+    return actions;
+  }
+
+  async function copyAnalysis(index) {
+    const turn = activeConversation()?.turns?.[index];
+    if (!turn?.payload || turn.payload.error) return;
+    const text = analysisCopyText(turn, buildView(turn.payload));
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("分析结论已复制");
+    } catch (_) {
+      const field = document.createElement("textarea");
+      field.value = text;
+      field.setAttribute("readonly", "");
+      field.style.position = "fixed";
+      field.style.opacity = "0";
+      document.body.append(field);
+      field.select();
+      const copied = document.execCommand("copy");
+      field.remove();
+      showToast(copied ? "分析结论已复制" : "复制失败，请稍后重试");
+    }
+  }
+
+  function exportCurrentTable(index) {
+    const turn = activeConversation()?.turns?.[index];
+    if (!turn?.payload || turn.payload.error) return;
+    const view = buildView(turn.payload);
+    if (!view.columns.length || !view.rows.length) return;
+    const blob = new Blob([buildCsv(view.columns, view.rows)], { type: "text/csv;charset=utf-8" });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = exportFilename(turn.question);
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(href);
+    showToast("CSV 已导出");
+  }
+
   function disposeCharts() {
     chartInstances.forEach(chart => { try { chart.dispose(); } catch (_) {} });
     chartInstances.clear();
@@ -266,6 +383,7 @@
         if (chart) body.append(chart);
         if (view.rows.length) body.append(makeTable(view)); else body.append(node("p", "", "本次查询没有返回数据明细。"));
       }
+      body.append(makeResultActions(turn, view, index));
     }
     card.append(body); row.append(card); return row;
   }
@@ -306,7 +424,8 @@
     state.page=page; document.querySelectorAll("[data-page]").forEach(button=>button.classList.toggle("active",button.dataset.page===page));
     document.querySelector(".workbench").classList.toggle("dashboard-mode",page==="dashboard");
     $("#chat-view").hidden=page!=="chat"; $("#dashboard-view").hidden=page!=="dashboard"; $("#detail-content").parentElement.hidden=page!=="chat";
-    $("#page-title").textContent=page==="dashboard"?"数据看板":activeConversation()?.title||"新会话"; $("#page-subtitle").textContent=page==="dashboard"?"当前浏览器的真实使用统计":"用自然语言查询银行经营数据"; $("#head-new-chat").hidden=page!=="chat";
+    $("#page-title").textContent=page==="dashboard"?"数据看板":activeConversation()?.title||"新会话"; $("#page-subtitle").textContent=page==="dashboard"?"当前浏览器的真实使用统计":"用自然语言查询银行经营数据"; $("#head-new-chat").hidden=page!=="chat"; $("#open-details").hidden=page!=="chat";
+    closeDrawers(false);
     if(page==="dashboard")renderDashboard();
   }
 
@@ -348,8 +467,8 @@
     const now=new Date().toISOString();
     const fixtures={
       empty:null,
-      trend:{question:"演示：最近七天指标趋势",summary:"验收 fixture：指标总体呈上升趋势，仅用于检查图表排版。",columns:["日期","演示值"],rows:[["07-20",82],["07-21",91],["07-22",88],["07-23",104],["07-24",110],["07-25",106],["07-26",121]],sql:"SELECT demo_date, demo_value FROM screenshot_fixture",warnings:["验收 fixture，不代表真实业务结果"],error:null,request_id:"fixture_trend",metadata:{result_type:"趋势",chart_type:"line",data_source:"验收 fixture",semantic:{metrics:["演示指标"],time_range:{start:"07-20",end:"07-26"}},security:{audit:"不适用（fixture）"}}},
-      history:{question:"演示：本月指标是多少？",summary:"验收 fixture：本月演示值为 121，仅用于检查历史会话恢复。",columns:["月份","演示值"],rows:[["本月",121]],sql:"SELECT demo_month, demo_value FROM screenshot_fixture",warnings:["验收 fixture，不代表真实业务结果"],error:null,request_id:"fixture_history_2",metadata:{result_type:"单值",data_source:"验收 fixture",semantic:{metrics:["演示指标"],time_range:{label:"本月"}},security:{audit:"不适用（fixture）"}}}
+      trend:{question:"演示：最近七天指标趋势",summary:"验收 fixture：指标总体呈上升趋势，仅用于检查图表排版。",columns:["data_date","metric_value"],rows:[["07-20",82],["07-21",91],["07-22",88],["07-23",104],["07-24",110],["07-25",106],["07-26",121]],sql:"SELECT demo_date, demo_value FROM screenshot_fixture",warnings:["验收 fixture，不代表真实业务结果"],error:null,request_id:"fixture_trend",metadata:{result_type:"趋势",chart_type:"line",data_source:"验收 fixture",semantic:{metrics:["演示指标"],time_range:{start:"07-20",end:"07-26"}},security:{audit:"不适用（fixture）"}}},
+      history:{question:"演示：本月指标是多少？",summary:"验收 fixture：本月演示值为 121，仅用于检查历史会话恢复。",columns:["data_date","metric_value"],rows:[["本月",121]],sql:"SELECT demo_month, demo_value FROM screenshot_fixture",warnings:["验收 fixture，不代表真实业务结果"],error:null,request_id:"fixture_history_2",metadata:{result_type:"单值",data_source:"验收 fixture",semantic:{metrics:["演示指标"],time_range:{label:"本月"}},security:{audit:"不适用（fixture）"}}}
     };
     if(fixture==="empty"){state.conversations=[];state.activeId=null;state.selectedTurn=null;return;}
     const payload=fixtures[fixture]||fixtures.trend; const turns=fixture==="history"?[{question:fixtures.trend.question,payload:fixtures.trend,elapsedMs:128,createdAt:now,pending:false},{question:payload.question,payload,elapsedMs:96,createdAt:now,pending:false}]:[{question:payload.question,payload,elapsedMs:128,createdAt:now,pending:false}]; state.conversations=[{id:"fixture_conversation",title:fixture==="history"?"验收 fixture：已恢复会话":"验收 fixture：趋势图",createdAt:now,updatedAt:now,turns}]; state.activeId="fixture_conversation"; state.selectedTurn=turns.length-1; if(params.get("page")==="dashboard")state.page="dashboard";
@@ -358,18 +477,29 @@
   function bind() {
     $("#new-chat").addEventListener("click",()=>createConversation()); $("#head-new-chat").addEventListener("click",()=>createConversation());
     $("#history-search").addEventListener("input",renderHistory);
-    $("#history-list").addEventListener("click",event=>{const target=event.target.closest("[data-conversation-id]");if(!target)return;state.activeId=target.dataset.conversationId;const conversation=activeConversation();state.selectedTurn=conversation?.turns?.length?conversation.turns.length-1:null;state.page="chat";persist();render();});
-    document.querySelector("nav").addEventListener("click",event=>{const target=event.target.closest("[data-page]");if(target)setPage(target.dataset.page);});
+    $("#history-list").addEventListener("click",event=>{const target=event.target.closest("[data-conversation-id]");if(!target)return;state.activeId=target.dataset.conversationId;const conversation=activeConversation();state.selectedTurn=conversation?.turns?.length?conversation.turns.length-1:null;state.page="chat";persist();closeDrawers(false);render();});
+    document.querySelector("nav").addEventListener("click",event=>{const target=event.target.closest("[data-page]");if(target){closeDrawers(false);setPage(target.dataset.page);}});
     $("#message-scroll").addEventListener("change",event=>{const select=event.target.closest("[data-confirm-field]");if(!select)return;const conversation=activeConversation(),turn=conversation?.turns?.[Number(select.dataset.turnIndex)];if(!turn)return;turn.confirmationSelections={...(turn.confirmationSelections||{})};if(select.value)turn.confirmationSelections[select.dataset.confirmField]=select.value;else delete turn.confirmationSelections[select.dataset.confirmField];persist();renderMessages();renderDetails();});
-    $("#message-scroll").addEventListener("click",event=>{const confirm=event.target.closest("[data-confirm-turn]");if(confirm){confirmTurn(Number(confirm.dataset.confirmTurn));return;}const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}if(event.target.closest("[data-confirm-field],.confirmation-option"))return;const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
+    $("#message-scroll").addEventListener("click",event=>{const copy=event.target.closest("[data-copy-turn]");if(copy){copyAnalysis(Number(copy.dataset.copyTurn));return;}const download=event.target.closest("[data-export-turn]");if(download){exportCurrentTable(Number(download.dataset.exportTurn));return;}const confirm=event.target.closest("[data-confirm-turn]");if(confirm){confirmTurn(Number(confirm.dataset.confirmTurn));return;}const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}if(event.target.closest("[data-confirm-field],.confirmation-option"))return;const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
     $("#composer").addEventListener("submit",event=>{event.preventDefault();const field=$("#question");const question=field.value;field.value="";submitQuestion(question);});
     $("#question").addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("#composer").requestSubmit();}});
+    $("#open-conversations").addEventListener("click",event=>openDrawer("conversation",event.currentTarget));
+    $("#open-details").addEventListener("click",event=>openDrawer("detail",event.currentTarget));
+    document.querySelectorAll("[data-close-drawer]").forEach(button=>button.addEventListener("click",()=>closeDrawers()));
+    $("#drawer-scrim").addEventListener("click",()=>closeDrawers());
+    document.addEventListener("keydown",event=>{if(event.key==="Escape"&&document.body.classList.contains("drawer-open"))closeDrawers();});
+    window.matchMedia("(min-width: 1100px)").addEventListener("change",event=>{if(event.matches)closeDrawers(false);});
+  }
+
+  function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("/candidate/assets/service-worker.js").catch(() => {});
   }
 
   async function initialize() {
     const response=await fetch("/candidate/assets/result_contract.json"); state.contract=await response.json();
     try { const examples=await fetch("/api/v1/examples"); const payload=await examples.json(); state.suggestions=(payload.examples||[]).map(item=>item.question).filter(Boolean); } catch (_) { state.suggestions=[]; }
-    loadConversations(); installFixture(); bind(); render();
+    loadConversations(); installFixture(); bind(); render(); registerServiceWorker();
     const params=new URLSearchParams(location.search);
     const demoMode=params.get("real_demo");
     const demoIndex={single:0,ranking:1,trend:2,"1":1}[demoMode];
@@ -388,5 +518,5 @@
       if(turn&&intentDemo==="confirmed")await confirmTurn(0);
     }
   }
-  initialize().catch(()=>{document.body.replaceChildren(node("div","error-card","候选前端资源加载失败，请重新启动服务。"));});
+  if (typeof document !== "undefined") initialize().catch(()=>{document.body.replaceChildren(node("div","error-card","候选前端资源加载失败，请重新启动服务。"));});
 })();

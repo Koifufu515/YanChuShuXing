@@ -33,6 +33,14 @@ class CandidateFrontendTest(unittest.TestCase):
         self.assertEqual(contract.status_code, 200)
         self.assertEqual(contract.json()["version"], 1)
 
+        manifest = self.client.get("/candidate/assets/manifest.webmanifest")
+        self.assertEqual(manifest.status_code, 200)
+        self.assertEqual(manifest.json()["start_url"], "/candidate")
+
+        service_worker = self.client.get("/candidate/assets/service-worker.js")
+        self.assertEqual(service_worker.status_code, 200)
+        self.assertIn('url.pathname.startsWith("/api/")', service_worker.text)
+
     def test_structured_answer_has_priority_and_legacy_response_falls_back(self) -> None:
         script = r"""
 const fs = require("fs");
@@ -87,6 +95,70 @@ console.log(JSON.stringify({headline: answer.headline, chart: option.series[0].t
             app_source.index("if (view.rows.length) body.append(makeTable(view));"),
             app_source.index("if (chart) body.append(chart);", app_source.index("if (view.structured)")),
         )
+
+    def test_export_helpers_escape_csv_and_exclude_internal_details(self) -> None:
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const source = fs.readFileSync("candidate_frontend/app.js", "utf8");
+const sandbox = {
+  window: { addEventListener() {}, YCSXResultAdapter: {} },
+  console,
+  setTimeout,
+  clearTimeout,
+};
+vm.runInNewContext(source, sandbox);
+const utils = sandbox.window.YCSXCandidateUtils;
+const csv = utils.buildCsv(
+  ["机构", "说明"],
+  [["A银行", "包含,逗号"], ["B银行", "包含\"引号\"\n和换行"]]
+);
+if (!csv.startsWith("\uFEFF机构,说明\r\n")) process.exit(1);
+if (!csv.includes('"包含,逗号"')) process.exit(2);
+if (!csv.includes('"包含""引号""\n和换行"')) process.exit(3);
+const filename = utils.exportFilename("机构/排名：分析？", new Date(2026, 6, 29, 9, 8, 7));
+if (filename !== "机构 排名 分析-20260729-090807.csv") process.exit(4);
+const copied = utils.analysisCopyText(
+  {createdAt: "2026-07-29T01:00:00Z", payload: {request_id: "req-1", sql: "SECRET SQL"}},
+  {structured: {headline: "结论标题"}, summary: "业务摘要"}
+);
+if (!copied.includes("结论标题") || !copied.includes("业务摘要") || !copied.includes("req-1")) process.exit(5);
+if (copied.includes("SECRET SQL")) process.exit(6);
+console.log(JSON.stringify({bom: csv.charCodeAt(0), filename, copied}));
+"""
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["bom"], 65279)
+        self.assertEqual(payload["filename"], "机构 排名 分析-20260729-090807.csv")
+        self.assertNotIn("SECRET SQL", payload["copied"])
+
+    def test_mobile_pwa_and_export_contracts_are_present(self) -> None:
+        frontend = ROOT / "candidate_frontend"
+        index = (frontend / "index.html").read_text("utf-8")
+        styles = (frontend / "styles.css").read_text("utf-8")
+        app_source = (frontend / "app.js").read_text("utf-8")
+        worker = (frontend / "service-worker.js").read_text("utf-8")
+        manifest = json.loads((frontend / "manifest.webmanifest").read_text("utf-8"))
+
+        self.assertIn('rel="manifest"', index)
+        self.assertIn('aria-controls="conversation-drawer"', index)
+        self.assertIn('aria-controls="detail-drawer"', index)
+        self.assertIn("100dvh", styles)
+        self.assertIn("@media(max-width:768px)", styles)
+        self.assertIn("overflow-x:auto", styles)
+        self.assertIn('fetch("/api/v1/query"', app_source)
+        self.assertIn("download.disabled = !view.columns.length || !view.rows.length", app_source)
+        self.assertNotIn("localhost", app_source)
+        self.assertIn('url.pathname.startsWith("/api/")', worker)
+        self.assertEqual(manifest["display"], "standalone")
+        self.assertEqual(manifest["start_url"], "/candidate")
+        self.assertEqual({icon["purpose"] for icon in manifest["icons"]}, {"any", "maskable"})
 
 
 if __name__ == "__main__":
