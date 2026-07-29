@@ -207,3 +207,9 @@ class AuditEvent:
     question: str
     sql: str | None = None
     error_code: str | None = None
+    actor_role: str | None = None
+    authenticated: bool | None = None
+    security_action: str | None = None
+    masking_profile: str | None = None
+    affected_column_count: int | None = None
+    referenced_institution_count: int | None = None

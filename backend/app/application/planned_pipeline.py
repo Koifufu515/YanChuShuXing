@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from app.adapters.security.institution_scope import (
-    require_institution_access,
+    InstitutionAccessDeniedError,
+    evaluate_institution_access,
 )
 from app.adapters.security.result_security import (
     secure_result,
@@ -77,10 +78,30 @@ class PlannedQueryPipeline:
                 )
 
             if command.security_principal is not None:
-                require_institution_access(
-                    plan_result.query_plan,
-                    command.security_principal,
+                access_decision = (
+                    evaluate_institution_access(
+                        plan_result.query_plan,
+                        command.security_principal,
+                    )
                 )
+
+                if not access_decision.allowed:
+                    self._record(
+                        command,
+                        "access_denied",
+                        error_code="ACCESS_DENIED",
+                        security_action=(
+                            "institution_scope_denied"
+                        ),
+                        referenced_institution_count=len(
+                            access_decision
+                            .referenced_institution_ids
+                        ),
+                    )
+
+                    raise InstitutionAccessDeniedError(
+                        access_decision.reason
+                    )
 
             execution = self.query_plan_executor.execute(
                 plan_result.query_plan
@@ -107,11 +128,33 @@ class PlannedQueryPipeline:
                     warnings.append(
                         "部分字段已根据当前岗位权限移除。"
                     )
+                    self._record(
+                        command,
+                        "result_secured",
+                        security_action=(
+                            "field_access_filtered"
+                        ),
+                        affected_column_count=len(
+                            secured_result
+                            .removed_columns
+                        ),
+                    )
 
                 if secured_result.masked_columns:
                     protected_result = True
                     warnings.append(
                         "部分字段已根据当前岗位执行动态脱敏。"
+                    )
+                    self._record(
+                        command,
+                        "result_secured",
+                        security_action=(
+                            "dynamic_masking"
+                        ),
+                        affected_column_count=len(
+                            secured_result
+                            .masked_columns
+                        ),
                     )
 
                 if protected_result:
@@ -221,7 +264,12 @@ class PlannedQueryPipeline:
         command: QueryCommand,
         event_type: str,
         error_code: str | None = None,
+        security_action: str | None = None,
+        affected_column_count: int | None = None,
+        referenced_institution_count: int | None = None,
     ) -> None:
+        principal = command.security_principal
+
         try:
             self.audit_logger.record(
                 AuditEvent(
@@ -230,6 +278,28 @@ class PlannedQueryPipeline:
                     user_id=command.user_id,
                     question=command.question,
                     error_code=error_code,
+                    actor_role=(
+                        principal.role
+                        if principal is not None
+                        else None
+                    ),
+                    authenticated=(
+                        principal.authenticated
+                        if principal is not None
+                        else None
+                    ),
+                    security_action=security_action,
+                    masking_profile=(
+                        principal.masking_profile
+                        if principal is not None
+                        else None
+                    ),
+                    affected_column_count=(
+                        affected_column_count
+                    ),
+                    referenced_institution_count=(
+                        referenced_institution_count
+                    ),
                 )
             )
         except Exception:

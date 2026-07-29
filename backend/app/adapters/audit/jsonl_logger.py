@@ -30,7 +30,7 @@ class JsonlAuditLogger:
         sql = event.sql or ""
 
         payload = {
-            "event_version": 1,
+            "event_version": 2,
             "occurred_at": datetime.now(
                 timezone.utc
             ).isoformat(),
@@ -52,6 +52,16 @@ class JsonlAuditLogger:
                 else None
             ),
             "error_code": event.error_code,
+            "actor_role": event.actor_role,
+            "authenticated": event.authenticated,
+            "security_action": event.security_action,
+            "masking_profile": event.masking_profile,
+            "affected_column_count": (
+                event.affected_column_count
+            ),
+            "referenced_institution_count": (
+                event.referenced_institution_count
+            ),
         }
 
         serialized = json.dumps(
