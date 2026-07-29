@@ -1201,6 +1201,123 @@ def validate_business_rules(
         and item.get("operator_id") == "OP019"
     ]
 
+    def contains_planned_date(
+        parameters: object,
+        expected_date: str,
+    ) -> bool:
+        if not isinstance(parameters, dict):
+            return False
+        if parameters.get("date") == expected_date:
+            return True
+        dates = parameters.get("dates")
+        if isinstance(dates, list) and expected_date in dates:
+            return True
+        start_date = parameters.get("start_date")
+        end_date = parameters.get("end_date")
+        return (
+            isinstance(start_date, str)
+            and isinstance(end_date, str)
+            and start_date <= expected_date <= end_date
+        )
+
+    time_for_base_validation = plan.get("time")
+    comparison_periods = (
+        time_for_base_validation.get(
+            "comparison_periods",
+            [],
+        )
+        if isinstance(
+            time_for_base_validation,
+            dict,
+        )
+        else []
+    )
+
+    for index, operation in enumerate(
+        operation_list
+    ):
+        if (
+            not isinstance(operation, dict)
+            or operation.get("operator_id")
+            != "OP021"
+        ):
+            continue
+
+        parameters = operation.get("parameters")
+        if not isinstance(parameters, dict):
+            continue
+
+        base_type = parameters.get("type")
+        reference_raw = parameters.get(
+            "reference_date"
+        )
+
+        if (
+            not isinstance(base_type, str)
+            or not isinstance(reference_raw, str)
+        ):
+            continue
+
+        try:
+            reference_date = date.fromisoformat(
+                reference_raw
+            )
+        except ValueError:
+            continue
+
+        expected_base = resolve_base_date(
+            base_type,
+            reference_date,
+        )
+        if expected_base is None:
+            continue
+
+        expected_iso = expected_base.isoformat()
+
+        base_is_read = any(
+            contains_planned_date(
+                item.get("parameters"),
+                expected_iso,
+            )
+            for item in op001_operations
+        )
+
+        if not base_is_read:
+            errors.append(
+                {
+                    "path": (
+                        f"operations.{index}."
+                        "parameters"
+                    ),
+                    "message": (
+                        f"OP021根据{reference_raw}和"
+                        f"{base_type}推导出的基期应为"
+                        f"{expected_iso}，必须由OP001"
+                        "实际读取该日期，不能使用近似日期。"
+                    ),
+                }
+            )
+
+        base_is_declared = any(
+            contains_planned_date(
+                period,
+                expected_iso,
+            )
+            for period in comparison_periods
+        )
+
+        if not base_is_declared:
+            errors.append(
+                {
+                    "path": "time.comparison_periods",
+                    "message": (
+                        f"comparison_periods必须包含"
+                        f"OP021推导出的准确基期"
+                        f"{expected_iso}。"
+                    ),
+                }
+            )
+
     op001_metric_to_outputs: dict[str, list[str]] = {}
     for operation in op001_operations:
         refs = operation.get("input_refs")
