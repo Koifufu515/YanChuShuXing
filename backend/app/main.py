@@ -22,6 +22,24 @@ register_error_handlers(app)
 configure_dependencies(app)
 
 CANDIDATE_FRONTEND_ROOT = PROJECT_ROOT / "candidate_frontend"
+
+
+@app.get(
+    "/candidate/service-worker.js",
+    include_in_schema=False,
+)
+def candidate_service_worker() -> FileResponse:
+    return FileResponse(
+        CANDIDATE_FRONTEND_ROOT
+        / "service-worker.js",
+        media_type="application/javascript",
+        headers={
+            "Service-Worker-Allowed": "/candidate",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
 app.mount(
     "/candidate/assets",
     StaticFiles(directory=CANDIDATE_FRONTEND_ROOT),
