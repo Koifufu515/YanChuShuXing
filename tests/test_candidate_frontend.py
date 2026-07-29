@@ -492,6 +492,92 @@ console.log(JSON.stringify({invalidMessage: invalid.error.message, deniedMessage
         self.assertIn("sessionStorage.setItem(AUTH_TOKEN_KEY", app_source)
         self.assertNotIn("localStorage.setItem(AUTH_TOKEN_KEY", app_source)
         self.assertNotIn("Authorization: Bearer", index)
+
+    def test_security_alert_normalization_labels_counts_and_access_policy(self) -> None:
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const source = fs.readFileSync("candidate_frontend/app.js", "utf8");
+const storage = () => {
+  const values = new Map();
+  return {
+    getItem(key) { return values.has(key) ? values.get(key) : null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { values.delete(key); },
+  };
+};
+const sandbox = {
+  window: { addEventListener() {}, YCSXResultAdapter: {} },
+  sessionStorage: storage(),
+  localStorage: storage(),
+  console,
+  setTimeout,
+  clearTimeout,
+};
+vm.runInNewContext(source, sandbox);
+const utils = sandbox.window.YCSXCandidateUtils;
+const payload = {
+  request_id: "req-list",
+  count: 4,
+  alerts: [
+    {occurred_at:"2026-07-29T09:00:00+00:00",alert_type:"repeated_authentication_failure",severity:"medium",event_count:5,window_seconds:60,security_action:"threshold",trigger_event_type:"authentication_failed",trigger_error_code:"INVALID_AUTHENTICATION",request_id:"req-1",actor_fingerprint:"abcdef123456",actor_sha256:"must-not-survive"},
+    {occurred_at:"2026-07-29T09:01:00+00:00",alert_type:"repeated_institution_scope_denial",severity:"high",event_count:4,window_seconds:300,request_id:"req-2",actor_fingerprint:"123456abcdef"},
+    {occurred_at:"2026-07-29T09:02:00+00:00",alert_type:"high_frequency_security_denial",severity:"critical",event_count:9,window_seconds:600,request_id:"req-3",actor_fingerprint:"fedcba654321"},
+    {occurred_at:"bad-date",alert_type:"future_alert_type",severity:"unknown",event_count:1,window_seconds:75,request_id:"req-4",actor_fingerprint:"001122334455"}
+  ]
+};
+const normalized = utils.normalizeSecurityAlertResponse(payload);
+if (!normalized || normalized.requestId !== "req-list" || normalized.alerts.length !== 4) process.exit(1);
+if (JSON.stringify(normalized).includes("must-not-survive") || "actor_sha256" in normalized.alerts[0]) process.exit(2);
+const counts = utils.securityAlertCounts(normalized.alerts);
+if (counts.total !== 4 || counts.medium !== 1 || counts.high !== 1 || counts.critical !== 1) process.exit(3);
+if (utils.securityAlertTypeLabel("repeated_authentication_failure") !== "重复认证失败") process.exit(4);
+if (utils.securityAlertTypeLabel("future_alert_type") !== "future_alert_type") process.exit(5);
+if (utils.securitySeverityLabel("critical") !== "严重风险") process.exit(6);
+if (utils.formatAlertWindow(60) !== "1 分钟" || utils.formatAlertWindow(300) !== "5 分钟" || utils.formatAlertWindow(75) !== "75 秒") process.exit(7);
+if (utils.securityAlertAccessPolicy(401,{error:{code:"INVALID_AUTHENTICATION"}}).status !== "authentication_required") process.exit(8);
+if (utils.securityAlertAccessPolicy(403,{error:{code:"ALERT_ACCESS_DENIED"}}).status !== "forbidden") process.exit(9);
+if (utils.securityAlertAccessPolicy(200,payload).status !== "success") process.exit(10);
+if (utils.normalizeSecurityAlertResponse({alerts:{}}) !== null) process.exit(11);
+console.log(JSON.stringify({counts, unknown:utils.securityAlertTypeLabel("future_alert_type")}));
+"""
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["counts"]["critical"], 1)
+        self.assertEqual(payload["unknown"], "future_alert_type")
+
+    def test_security_center_is_manual_authenticated_and_memory_only(self) -> None:
+        frontend = ROOT / "candidate_frontend"
+        index = (frontend / "index.html").read_text("utf-8")
+        app_source = (frontend / "app.js").read_text("utf-8")
+        styles = (frontend / "styles.css").read_text("utf-8")
+
+        self.assertIn('data-page="security"', index)
+        self.assertIn("安全中心", index)
+        self.assertIn('id="refresh-security-alerts"', index)
+        self.assertIn('aria-live="polite"', index)
+        self.assertEqual(
+            app_source.count('apiFetch("/api/v1/security/alerts?limit=50"'),
+            1,
+        )
+        self.assertNotIn("/api/v1/security/alerts?limit=50&", app_source)
+        self.assertIn("applyAuthenticationResponse(response.status, payload)", app_source)
+        self.assertIn('state.page === "security"', app_source)
+        self.assertIn("state.fixtureMode", app_source)
+        self.assertIn("securityStatus", app_source)
+        self.assertNotIn("securityAlerts", app_source[app_source.index("function persist()"):app_source.index("function showToast")])
+        self.assertNotIn("actor_sha256", index)
+        self.assertNotIn("actor_sha256", app_source)
+        self.assertNotIn("导出安全告警", index + app_source)
+        self.assertIn("security-table-wrap", styles)
+        self.assertIn("overflow-x:auto", styles)
+        self.assertIn("security-overview", styles)
         self.assertNotIn("session-secret-token", index)
 
 

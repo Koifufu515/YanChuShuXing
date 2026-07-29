@@ -18,6 +18,7 @@
       <nav aria-label="主要功能">
         <button class="nav-item active" type="button" data-page="chat"><span>◫</span>聊天分析</button>
         <button class="nav-item" type="button" data-page="dashboard"><span>▦</span>数据看板</button>
+        <button class="nav-item" type="button" data-page="security"><span>◇</span>安全中心</button>
       </nav>
       <section class="history-head"><strong>历史会话</strong><span id="history-count">0</span></section>
       <label class="search"><span>⌕</span><input id="history-search" type="search" placeholder="检索历史会话" autocomplete="off" aria-label="检索历史会话"></label>
@@ -31,7 +32,7 @@
     </aside>
 
     <section class="center-panel" data-testid="chat-panel">
-      <header class="panel-head"><div class="mobile-toolbar"><button id="open-conversations" class="ghost drawer-trigger" type="button" aria-expanded="false" aria-controls="conversation-drawer">会话</button></div><div class="panel-title"><h1 id="page-title">新会话</h1><p id="page-subtitle">用自然语言查询银行经营数据</p></div><div class="panel-actions"><button id="head-new-chat" class="ghost" type="button">＋ 新建会话</button><button id="open-details" class="ghost drawer-trigger" type="button" aria-expanded="false" aria-controls="detail-drawer">详情</button></div></header>
+      <header class="panel-head"><div class="mobile-toolbar"><button id="open-conversations" class="ghost drawer-trigger" type="button" aria-expanded="false" aria-controls="conversation-drawer">会话</button></div><div class="panel-title"><h1 id="page-title" tabindex="-1">新会话</h1><p id="page-subtitle">用自然语言查询银行经营数据</p></div><div class="panel-actions"><button id="head-new-chat" class="ghost" type="button">＋ 新建会话</button><button id="open-details" class="ghost drawer-trigger" type="button" aria-expanded="false" aria-controls="detail-drawer">详情</button></div></header>
       <div id="chat-view" class="chat-view">
         <div id="message-scroll" class="message-scroll" data-testid="message-scroll"></div>
         <form id="composer" class="composer" data-testid="fixed-composer">
@@ -41,6 +42,14 @@
         </form>
       </div>
       <div id="dashboard-view" class="dashboard-view" hidden></div>
+      <section id="security-view" class="security-view" hidden aria-labelledby="security-heading">
+        <header class="security-toolbar">
+          <div><h2 id="security-heading">安全告警</h2><p>查看受控接口返回的近期安全事件。</p></div>
+          <button id="refresh-security-alerts" class="primary security-refresh" type="button">刷新告警</button>
+        </header>
+        <p id="security-status" class="security-status" role="status" aria-live="polite">尚未加载安全告警。</p>
+        <div id="security-content" class="security-content"></div>
+      </section>
     </section>
 
     <aside id="detail-drawer" class="detail-panel" data-testid="detail-panel" aria-label="执行详情">
