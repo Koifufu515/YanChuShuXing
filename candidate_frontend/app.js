@@ -4,6 +4,8 @@
   const STORAGE_KEY = "ycsx_candidate_conversations_v1";
   const ACTIVE_KEY = "ycsx_candidate_active_v1";
   const USER_ID = "competition_demo_user";
+  const DESKTOP_DRAWER_QUERY = "(min-width: 1100px)";
+  const FOCUSABLE_SELECTOR = 'a[href], button, input, select, textarea, summary, [contenteditable="true"], [tabindex]';
   const $ = (selector) => document.querySelector(selector);
   const adapter = window.YCSXResultAdapter;
   const chartInstances = new Set();
@@ -28,7 +30,8 @@
   }
 
   function csvEscape(value) {
-    const text = value === null || value === undefined ? "" : String(value);
+    const protectedValue = typeof value === "string" && /^[ \t\r]*[=+\-@]/.test(value) ? `'${value}` : value;
+    const text = protectedValue === null || protectedValue === undefined ? "" : String(protectedValue);
     return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
   }
 
@@ -61,7 +64,19 @@
     return lines.filter(Boolean).join("\n");
   }
 
-  window.YCSXCandidateUtils = Object.freeze({ csvEscape, buildCsv, safeFileStem, exportFilename, analysisCopyText });
+  window.YCSXCandidateUtils = Object.freeze({
+    csvEscape,
+    buildCsv,
+    safeFileStem,
+    exportFilename,
+    analysisCopyText,
+    syncDrawerAccessibility,
+    openDrawer,
+    closeDrawers,
+    trapDrawerFocus,
+    handleDrawerKeydown,
+    handleDrawerBreakpointChange,
+  });
 
   function loadConversations() {
     try {
@@ -88,10 +103,106 @@
     toastTimer = setTimeout(() => toast.classList.remove("visible"), 1800);
   }
 
+  function isDesktopLayout() {
+    return typeof window.matchMedia === "function" && window.matchMedia(DESKTOP_DRAWER_QUERY).matches;
+  }
+
+  function drawerElements() {
+    return [
+      { drawer: $("#conversation-drawer"), trigger: $("#open-conversations"), openClass: "conversation-open" },
+      { drawer: $("#detail-drawer"), trigger: $("#open-details"), openClass: "detail-open" },
+    ];
+  }
+
+  function visibleFocusableElements(drawer) {
+    if (!drawer) return [];
+    return Array.from(drawer.querySelectorAll(FOCUSABLE_SELECTOR)).filter(element => {
+      if (element.disabled || element.hidden || element.tabIndex === -1) return false;
+      if (element.getAttribute("aria-hidden") === "true") return false;
+      return typeof element.getClientRects !== "function" || element.getClientRects().length > 0;
+    });
+  }
+
+  function syncDrawerAccessibility() {
+    const desktop = isDesktopLayout();
+    let drawerOpen = false;
+
+    drawerElements().forEach(({ drawer, trigger, openClass }) => {
+      if (!drawer) return;
+      const open = !desktop && document.body.classList.contains(openClass);
+      drawerOpen ||= open;
+      trigger?.setAttribute("aria-expanded", String(open));
+
+      if (desktop) {
+        drawer.inert = false;
+        drawer.removeAttribute("aria-hidden");
+        drawer.removeAttribute("role");
+        drawer.removeAttribute("aria-modal");
+        return;
+      }
+
+      drawer.inert = !open;
+      drawer.setAttribute("aria-hidden", open ? "false" : "true");
+      if (open) {
+        drawer.setAttribute("role", "dialog");
+        drawer.setAttribute("aria-modal", "true");
+      } else {
+        drawer.removeAttribute("role");
+        drawer.removeAttribute("aria-modal");
+      }
+    });
+
+    const centerPanel = $(".center-panel");
+    if (centerPanel) centerPanel.inert = drawerOpen;
+  }
+
+  function activeDrawer() {
+    if (isDesktopLayout()) return null;
+    if (document.body.classList.contains("conversation-open")) return $("#conversation-drawer");
+    if (document.body.classList.contains("detail-open")) return $("#detail-drawer");
+    return null;
+  }
+
+  function trapDrawerFocus(event) {
+    if (event.key !== "Tab") return false;
+    const drawer = activeDrawer();
+    if (!drawer) return false;
+    const focusable = visibleFocusableElements(drawer);
+    if (!focusable.length) {
+      event.preventDefault();
+      return true;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !drawer.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+      return true;
+    }
+    if (!event.shiftKey && (document.activeElement === last || !drawer.contains(document.activeElement))) {
+      event.preventDefault();
+      first.focus();
+      return true;
+    }
+    return false;
+  }
+
+  function handleDrawerKeydown(event) {
+    if (event.key === "Escape" && document.body.classList.contains("drawer-open")) {
+      closeDrawers();
+      return true;
+    }
+    return trapDrawerFocus(event);
+  }
+
+  function handleDrawerBreakpointChange(event) {
+    if (event.matches) closeDrawers(false);
+    else syncDrawerAccessibility();
+  }
+
   function closeDrawers(restoreFocus = true) {
     document.body.classList.remove("conversation-open", "detail-open", "drawer-open");
-    $("#open-conversations")?.setAttribute("aria-expanded", "false");
-    $("#open-details")?.setAttribute("aria-expanded", "false");
+    syncDrawerAccessibility();
     if (restoreFocus && drawerReturnFocus && typeof drawerReturnFocus.focus === "function") drawerReturnFocus.focus();
     drawerReturnFocus = null;
   }
@@ -100,10 +211,9 @@
     closeDrawers(false);
     drawerReturnFocus = trigger || document.activeElement;
     document.body.classList.add(`${kind}-open`, "drawer-open");
-    const triggerSelector = kind === "conversation" ? "#open-conversations" : "#open-details";
     const drawerSelector = kind === "conversation" ? "#conversation-drawer" : "#detail-drawer";
-    $(triggerSelector)?.setAttribute("aria-expanded", "true");
-    requestAnimationFrame(() => $(drawerSelector)?.querySelector("button, input, [tabindex='0']")?.focus());
+    syncDrawerAccessibility();
+    requestAnimationFrame(() => visibleFocusableElements($(drawerSelector))[0]?.focus());
   }
 
   function activeConversation() { return state.conversations.find(item => item.id === state.activeId) || null; }
@@ -425,7 +535,7 @@
     document.querySelector(".workbench").classList.toggle("dashboard-mode",page==="dashboard");
     $("#chat-view").hidden=page!=="chat"; $("#dashboard-view").hidden=page!=="dashboard"; $("#detail-content").parentElement.hidden=page!=="chat";
     $("#page-title").textContent=page==="dashboard"?"数据看板":activeConversation()?.title||"新会话"; $("#page-subtitle").textContent=page==="dashboard"?"当前浏览器的真实使用统计":"用自然语言查询银行经营数据"; $("#head-new-chat").hidden=page!=="chat"; $("#open-details").hidden=page!=="chat";
-    closeDrawers(false);
+    closeDrawers();
     if(page==="dashboard")renderDashboard();
   }
 
@@ -477,8 +587,8 @@
   function bind() {
     $("#new-chat").addEventListener("click",()=>createConversation()); $("#head-new-chat").addEventListener("click",()=>createConversation());
     $("#history-search").addEventListener("input",renderHistory);
-    $("#history-list").addEventListener("click",event=>{const target=event.target.closest("[data-conversation-id]");if(!target)return;state.activeId=target.dataset.conversationId;const conversation=activeConversation();state.selectedTurn=conversation?.turns?.length?conversation.turns.length-1:null;state.page="chat";persist();closeDrawers(false);render();});
-    document.querySelector("nav").addEventListener("click",event=>{const target=event.target.closest("[data-page]");if(target){closeDrawers(false);setPage(target.dataset.page);}});
+    $("#history-list").addEventListener("click",event=>{const target=event.target.closest("[data-conversation-id]");if(!target)return;state.activeId=target.dataset.conversationId;const conversation=activeConversation();state.selectedTurn=conversation?.turns?.length?conversation.turns.length-1:null;state.page="chat";persist();closeDrawers();render();});
+    document.querySelector("nav").addEventListener("click",event=>{const target=event.target.closest("[data-page]");if(target)setPage(target.dataset.page);});
     $("#message-scroll").addEventListener("change",event=>{const select=event.target.closest("[data-confirm-field]");if(!select)return;const conversation=activeConversation(),turn=conversation?.turns?.[Number(select.dataset.turnIndex)];if(!turn)return;turn.confirmationSelections={...(turn.confirmationSelections||{})};if(select.value)turn.confirmationSelections[select.dataset.confirmField]=select.value;else delete turn.confirmationSelections[select.dataset.confirmField];persist();renderMessages();renderDetails();});
     $("#message-scroll").addEventListener("click",event=>{const copy=event.target.closest("[data-copy-turn]");if(copy){copyAnalysis(Number(copy.dataset.copyTurn));return;}const download=event.target.closest("[data-export-turn]");if(download){exportCurrentTable(Number(download.dataset.exportTurn));return;}const confirm=event.target.closest("[data-confirm-turn]");if(confirm){confirmTurn(Number(confirm.dataset.confirmTurn));return;}const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}if(event.target.closest("[data-confirm-field],.confirmation-option"))return;const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
     $("#composer").addEventListener("submit",event=>{event.preventDefault();const field=$("#question");const question=field.value;field.value="";submitQuestion(question);});
@@ -487,8 +597,9 @@
     $("#open-details").addEventListener("click",event=>openDrawer("detail",event.currentTarget));
     document.querySelectorAll("[data-close-drawer]").forEach(button=>button.addEventListener("click",()=>closeDrawers()));
     $("#drawer-scrim").addEventListener("click",()=>closeDrawers());
-    document.addEventListener("keydown",event=>{if(event.key==="Escape"&&document.body.classList.contains("drawer-open"))closeDrawers();});
-    window.matchMedia("(min-width: 1100px)").addEventListener("change",event=>{if(event.matches)closeDrawers(false);});
+    document.addEventListener("keydown",handleDrawerKeydown);
+    window.matchMedia(DESKTOP_DRAWER_QUERY).addEventListener("change",handleDrawerBreakpointChange);
+    syncDrawerAccessibility();
   }
 
   function registerServiceWorker() {
