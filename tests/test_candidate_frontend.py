@@ -110,12 +110,24 @@ const sandbox = {
 vm.runInNewContext(source, sandbox);
 const utils = sandbox.window.YCSXCandidateUtils;
 const csv = utils.buildCsv(
-  ["机构", "说明"],
-  [["A银行", "包含,逗号"], ["B银行", "包含\"引号\"\n和换行"]]
+  ["机构", "说明", "数值"],
+  [
+    ["A银行", "包含,逗号", -123.45],
+    ["B银行", "包含\"引号\"\n和换行", "普通文本"],
+    ["C银行", "=SUM(1,2)", " +CMD"],
+    ["D银行", "\t@HYPERLINK(...) ", "-1+2"]
+  ]
 );
-if (!csv.startsWith("\uFEFF机构,说明\r\n")) process.exit(1);
+if (!csv.startsWith("\uFEFF机构,说明,数值\r\n")) process.exit(1);
 if (!csv.includes('"包含,逗号"')) process.exit(2);
 if (!csv.includes('"包含""引号""\n和换行"')) process.exit(3);
+if (!csv.includes('"\'=SUM(1,2)"')) process.exit(7);
+if (!csv.includes("' +CMD")) process.exit(8);
+if (!csv.includes("'\t@HYPERLINK(...) ")) process.exit(9);
+if (!csv.includes("'-1+2")) process.exit(10);
+if (!csv.includes(",-123.45")) process.exit(11);
+if (csv.includes(",' -123.45") || csv.includes(",'-123.45")) process.exit(12);
+if (!csv.includes("普通文本")) process.exit(13);
 const filename = utils.exportFilename("机构/排名：分析？", new Date(2026, 6, 29, 9, 8, 7));
 if (filename !== "机构 排名 分析-20260729-090807.csv") process.exit(4);
 const copied = utils.analysisCopyText(
@@ -138,6 +150,151 @@ console.log(JSON.stringify({bom: csv.charCodeAt(0), filename, copied}));
         self.assertEqual(payload["filename"], "机构 排名 分析-20260729-090807.csv")
         self.assertNotIn("SECRET SQL", payload["copied"])
 
+    def test_service_worker_preserves_unrelated_cache_namespaces(self) -> None:
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const source = fs.readFileSync("candidate_frontend/service-worker.js", "utf8");
+const listeners = {};
+const deleted = [];
+const context = {
+  URL,
+  Promise,
+  caches: {
+    keys: async () => [
+      "yanchushuxing-candidate-v1",
+      "yanchushuxing-candidate-v2",
+      "other-application-v9"
+    ],
+    delete: async key => { deleted.push(key); return true; },
+    open: async () => ({ addAll: async () => {}, put: async () => {} }),
+    match: async () => null,
+  },
+  self: {
+    location: { origin: "https://example.test" },
+    clients: { claim: async () => {} },
+    skipWaiting() {},
+    addEventListener(type, handler) { listeners[type] = handler; },
+  },
+};
+vm.runInNewContext(source, context);
+let activation;
+listeners.activate({ waitUntil(promise) { activation = promise; } });
+activation.then(() => {
+  if (deleted.length !== 1 || deleted[0] !== "yanchushuxing-candidate-v1") process.exit(1);
+  if (deleted.includes("other-application-v9")) process.exit(2);
+  console.log(JSON.stringify({deleted}));
+});
+"""
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(json.loads(result.stdout)["deleted"], ["yanchushuxing-candidate-v1"])
+
+    def test_drawer_accessibility_state_focus_loop_and_desktop_reset(self) -> None:
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const source = fs.readFileSync("candidate_frontend/app.js", "utf8");
+let desktop = false;
+const classes = new Set();
+const classList = {
+  add(...names) { names.forEach(name => classes.add(name)); },
+  remove(...names) { names.forEach(name => classes.delete(name)); },
+  contains(name) { return classes.has(name); },
+};
+const document = { body: { classList }, activeElement: null };
+function makeElement(name) {
+  const attributes = new Map();
+  return {
+    name,
+    inert: false,
+    disabled: false,
+    hidden: false,
+    tabIndex: 0,
+    focusables: [],
+    setAttribute(key, value) { attributes.set(key, String(value)); },
+    removeAttribute(key) { attributes.delete(key); },
+    getAttribute(key) { return attributes.has(key) ? attributes.get(key) : null; },
+    getClientRects() { return [{}]; },
+    querySelectorAll() { return this.focusables; },
+    contains(target) { return target === this || this.focusables.includes(target); },
+    focus() { document.activeElement = this; },
+  };
+}
+const conversation = makeElement("conversation");
+const detail = makeElement("detail");
+const conversationTrigger = makeElement("conversation-trigger");
+const detailTrigger = makeElement("detail-trigger");
+const center = makeElement("center");
+const first = makeElement("first");
+const last = makeElement("last");
+conversation.focusables = [first, last];
+detail.focusables = [makeElement("detail-first")];
+const elements = {
+  "#conversation-drawer": conversation,
+  "#detail-drawer": detail,
+  "#open-conversations": conversationTrigger,
+  "#open-details": detailTrigger,
+  ".center-panel": center,
+};
+document.querySelector = selector => elements[selector] || null;
+const sandbox = {
+  window: {
+    addEventListener() {},
+    matchMedia() { return {matches: desktop}; },
+    YCSXResultAdapter: {},
+  },
+  requestAnimationFrame(callback) { callback(); },
+  console,
+  setTimeout,
+  clearTimeout,
+};
+vm.runInNewContext(source, sandbox);
+sandbox.document = document;
+const utils = sandbox.window.YCSXCandidateUtils;
+utils.syncDrawerAccessibility();
+if (!conversation.inert || conversation.getAttribute("aria-hidden") !== "true") process.exit(1);
+if (!detail.inert || detail.getAttribute("aria-hidden") !== "true") process.exit(2);
+utils.openDrawer("conversation", conversationTrigger);
+if (conversation.inert || conversation.getAttribute("aria-hidden") !== "false") process.exit(3);
+if (conversation.getAttribute("role") !== "dialog" || conversation.getAttribute("aria-modal") !== "true") process.exit(4);
+if (conversationTrigger.getAttribute("aria-expanded") !== "true" || !detail.inert || !center.inert) process.exit(5);
+if (document.activeElement !== first) process.exit(6);
+document.activeElement = last;
+let prevented = false;
+utils.trapDrawerFocus({key: "Tab", shiftKey: false, preventDefault() { prevented = true; }});
+if (!prevented || document.activeElement !== first) process.exit(7);
+document.activeElement = first;
+prevented = false;
+utils.trapDrawerFocus({key: "Tab", shiftKey: true, preventDefault() { prevented = true; }});
+if (!prevented || document.activeElement !== last) process.exit(8);
+utils.handleDrawerKeydown({key: "Escape", shiftKey: false, preventDefault() {}});
+if (classes.has("drawer-open") || document.activeElement !== conversationTrigger) process.exit(9);
+if (!conversation.inert || conversation.getAttribute("aria-hidden") !== "true" || center.inert) process.exit(10);
+utils.openDrawer("detail", detailTrigger);
+desktop = true;
+utils.handleDrawerBreakpointChange({matches: true});
+if (classes.has("drawer-open") || conversation.inert || detail.inert || center.inert) process.exit(11);
+if (conversation.getAttribute("aria-hidden") !== null || detail.getAttribute("aria-modal") !== null) process.exit(12);
+console.log(JSON.stringify({escapeRestored: true, desktopReset: true}));
+"""
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            json.loads(result.stdout),
+            {"escapeRestored": True, "desktopReset": True},
+        )
+
     def test_mobile_pwa_and_export_contracts_are_present(self) -> None:
         frontend = ROOT / "candidate_frontend"
         index = (frontend / "index.html").read_text("utf-8")
@@ -156,6 +313,15 @@ console.log(JSON.stringify({bom: csv.charCodeAt(0), filename, copied}));
         self.assertIn("download.disabled = !view.columns.length || !view.rows.length", app_source)
         self.assertNotIn("localhost", app_source)
         self.assertIn('url.pathname.startsWith("/api/")', worker)
+        self.assertIn('const CACHE_PREFIX = "yanchushuxing-candidate-"', worker)
+        self.assertIn("key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME", worker)
+        self.assertNotIn("keys.filter(key => key !== CACHE_NAME)", worker)
+        self.assertIn("syncDrawerAccessibility", app_source)
+        self.assertIn("trapDrawerFocus", app_source)
+        self.assertIn('drawer.setAttribute("aria-hidden", open ? "false" : "true")', app_source)
+        self.assertIn("drawer.inert = !open", app_source)
+        self.assertIn('drawer.setAttribute("aria-modal", "true")', app_source)
+        self.assertIn("centerPanel.inert = drawerOpen", app_source)
         self.assertEqual(manifest["display"], "standalone")
         self.assertEqual(manifest["start_url"], "/candidate")
         self.assertEqual({icon["purpose"] for icon in manifest["icons"]}, {"any", "maskable"})
