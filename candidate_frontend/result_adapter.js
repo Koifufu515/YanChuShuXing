@@ -11,6 +11,7 @@
 
   const ANSWER_TYPE_LABELS = Object.freeze({
     trend: "趋势",
+    ranking: "排名",
     benchmark_comparison: "跨期比较",
     main_metrics_overview: "综合分析",
     single_value: "单值",

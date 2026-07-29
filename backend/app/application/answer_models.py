@@ -76,10 +76,35 @@ class TrendOverviewFacts:
     answer_type: str = "trend"
 
 
+@dataclass(frozen=True)
+class RankingItem:
+    institution: InstitutionRef
+    value: JsonScalar
+    rank: int
+
+
+@dataclass(frozen=True)
+class MetricRankingFacts:
+    metric: MetricRef
+    items: list[RankingItem]
+    population_size: int
+    ranking_method: str
+
+
+@dataclass(frozen=True)
+class RankingOverviewFacts:
+    period: str
+    rankings: list[MetricRankingFacts]
+    selection_mode: str
+    requested_n: int | None = None
+    answer_type: str = "ranking"
+
+
 AnalysisFacts = (
     BenchmarkComparisonFacts
     | MainMetricsOverviewFacts
     | TrendOverviewFacts
+    | RankingOverviewFacts
 )
 
 

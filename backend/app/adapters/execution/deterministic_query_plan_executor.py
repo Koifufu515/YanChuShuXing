@@ -20,6 +20,9 @@ from app.application.answer_models import (
     TrendOverviewFacts,
     TrendPoint,
     TrendSeries,
+    MetricRankingFacts,
+    RankingItem,
+    RankingOverviewFacts,
 )
 from app.application.models import JsonScalar, QueryPlanExecutionResult
 from app.ports.database_executor import DatabaseExecutor
@@ -125,6 +128,11 @@ class DeterministicQueryPlanExecutor:
         )
         if analysis_facts is None:
             analysis_facts = self._main_metrics_overview_facts(
+                query_plan,
+                context,
+            )
+        if analysis_facts is None:
+            analysis_facts = self._ranking_overview_facts(
                 query_plan,
                 context,
             )
@@ -586,6 +594,605 @@ class DeterministicQueryPlanExecutor:
             ),
             period=period,
             metrics=metric_facts,
+        )
+
+    @staticmethod
+    def _ranking_overview_facts(
+        query_plan: dict[str, Any],
+        context: dict[str, ExecutionValue],
+    ) -> RankingOverviewFacts | None:
+        operations = query_plan.get("operations")
+        if not isinstance(operations, list) or not operations:
+            return None
+
+        producers = {
+            operation.get("output_ref"): operation
+            for operation in operations
+            if (
+                isinstance(operation, dict)
+                and isinstance(
+                    operation.get("output_ref"),
+                    str,
+                )
+            )
+        }
+
+        final_operation = operations[-1]
+        if not isinstance(final_operation, dict):
+            return None
+
+        final_operator = final_operation.get(
+            "operator_id"
+        )
+
+        if final_operator == "OP019":
+            final_refs = final_operation.get(
+                "input_refs"
+            )
+            if (
+                not isinstance(final_refs, list)
+                or not final_refs
+                or not all(
+                    isinstance(ref, str)
+                    for ref in final_refs
+                )
+            ):
+                return None
+            selected_refs = list(final_refs)
+        elif final_operator in {
+            "OP011",
+            "OP012",
+            "OP013",
+        }:
+            output_ref = final_operation.get(
+                "output_ref"
+            )
+            if not isinstance(output_ref, str):
+                return None
+            selected_refs = [output_ref]
+        else:
+            return None
+
+        def records_for(
+            output_ref: str,
+        ) -> list[dict[str, Any]] | None:
+            value = context.get(output_ref)
+            if (
+                not isinstance(value, ExecutionValue)
+                or value.kind != "records"
+                or not isinstance(value.data, list)
+            ):
+                return None
+
+            records = [
+                item
+                for item in value.data
+                if isinstance(item, dict)
+            ]
+            return records if records else None
+
+        def ranking_lineage(
+            selected_ref: str,
+        ) -> tuple[
+            str,
+            dict[str, Any],
+            dict[str, Any] | None,
+        ] | None:
+            selected_operation = producers.get(
+                selected_ref
+            )
+            if not isinstance(
+                selected_operation,
+                dict,
+            ):
+                return None
+
+            operator_id = selected_operation.get(
+                "operator_id"
+            )
+
+            if operator_id in {"OP011", "OP012"}:
+                return (
+                    selected_ref,
+                    selected_operation,
+                    None,
+                )
+
+            if operator_id != "OP013":
+                return None
+
+            input_refs = selected_operation.get(
+                "input_refs"
+            )
+            if (
+                not isinstance(input_refs, list)
+                or len(input_refs) != 1
+                or not isinstance(input_refs[0], str)
+            ):
+                return None
+
+            rank_ref = input_refs[0]
+            rank_operation = producers.get(rank_ref)
+
+            if (
+                not isinstance(rank_operation, dict)
+                or rank_operation.get("operator_id")
+                not in {"OP011", "OP012"}
+            ):
+                return None
+
+            return (
+                rank_ref,
+                rank_operation,
+                selected_operation,
+            )
+
+        lineages: list[
+            tuple[
+                str,
+                str,
+                dict[str, Any],
+                dict[str, Any] | None,
+            ]
+        ] = []
+
+        for selected_ref in selected_refs:
+            lineage = ranking_lineage(
+                selected_ref
+            )
+            if lineage is None:
+                return None
+
+            rank_ref, rank_operation, take_operation = (
+                lineage
+            )
+            lineages.append(
+                (
+                    selected_ref,
+                    rank_ref,
+                    rank_operation,
+                    take_operation,
+                )
+            )
+
+        institutions_plan = query_plan.get(
+            "institutions"
+        )
+        targets = (
+            institutions_plan.get("targets")
+            if isinstance(
+                institutions_plan,
+                dict,
+            )
+            else []
+        )
+        targets = (
+            targets
+            if isinstance(targets, list)
+            else []
+        )
+
+        target_ids = {
+            item.get("institution_id")
+            for item in targets
+            if (
+                isinstance(item, dict)
+                and isinstance(
+                    item.get("institution_id"),
+                    str,
+                )
+            )
+        }
+
+        metrics_plan = query_plan.get("metrics")
+        requested_metric_ids = (
+            metrics_plan.get(
+                "requested_metric_ids"
+            )
+            if isinstance(metrics_plan, dict)
+            else []
+        )
+        requested_metric_ids = [
+            metric_id
+            for metric_id in requested_metric_ids
+            if isinstance(metric_id, str)
+        ]
+
+        grouped: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        take_directions: set[str] = set()
+        take_sizes: set[int] = set()
+        all_dates: set[str] = set()
+
+        for (
+            selected_ref,
+            rank_ref,
+            rank_operation,
+            take_operation,
+        ) in lineages:
+            selected_records = records_for(
+                selected_ref
+            )
+            ranked_records = records_for(rank_ref)
+
+            if (
+                selected_records is None
+                or ranked_records is None
+            ):
+                return None
+
+            rank_operator = rank_operation.get(
+                "operator_id"
+            )
+            rank_parameters = rank_operation.get(
+                "parameters"
+            )
+            rank_parameters = (
+                rank_parameters
+                if isinstance(rank_parameters, dict)
+                else {}
+            )
+
+            if rank_operator == "OP012":
+                performance_direction = (
+                    rank_parameters.get(
+                        "performance_direction"
+                    )
+                )
+                if performance_direction not in {
+                    "higher_is_better",
+                    "lower_is_better",
+                }:
+                    return None
+                ranking_method = "performance"
+            elif rank_operator == "OP011":
+                order = rank_parameters.get(
+                    "order"
+                )
+                if order not in {
+                    "ascending",
+                    "descending",
+                }:
+                    return None
+                performance_direction = (
+                    "not_applicable"
+                )
+                ranking_method = "numeric"
+            else:
+                return None
+
+            if take_operation is not None:
+                take_parameters = take_operation.get(
+                    "parameters"
+                )
+                take_parameters = (
+                    take_parameters
+                    if isinstance(
+                        take_parameters,
+                        dict,
+                    )
+                    else {}
+                )
+                direction = take_parameters.get(
+                    "direction"
+                )
+                n = take_parameters.get("n")
+
+                if direction not in {
+                    "top",
+                    "bottom",
+                }:
+                    return None
+                if (
+                    isinstance(n, bool)
+                    or not isinstance(n, int)
+                    or n < 1
+                ):
+                    return None
+
+                take_directions.add(direction)
+                take_sizes.add(n)
+
+            full_groups: dict[
+                tuple[str, str],
+                list[dict[str, Any]],
+            ] = defaultdict(list)
+
+            for record in ranked_records:
+                metric_id = record.get("metric_id")
+                data_date = record.get("date")
+
+                if (
+                    not isinstance(metric_id, str)
+                    or not isinstance(data_date, str)
+                ):
+                    return None
+
+                full_groups[
+                    (data_date, metric_id)
+                ].append(record)
+
+            selected_groups: dict[
+                tuple[str, str],
+                list[dict[str, Any]],
+            ] = defaultdict(list)
+
+            for record in selected_records:
+                metric_id = record.get("metric_id")
+                data_date = record.get("date")
+
+                if (
+                    not isinstance(metric_id, str)
+                    or not isinstance(data_date, str)
+                ):
+                    return None
+
+                selected_groups[
+                    (data_date, metric_id)
+                ].append(record)
+
+            for (
+                data_date,
+                metric_id,
+            ), selected_group in selected_groups.items():
+                full_group = full_groups.get(
+                    (data_date, metric_id)
+                )
+                if not full_group:
+                    return None
+
+                all_dates.add(data_date)
+
+                metric_names = {
+                    item.get("metric_name")
+                    for item in full_group
+                }
+                units = {
+                    item.get("unit")
+                    for item in full_group
+                }
+
+                if (
+                    len(metric_names) != 1
+                    or len(units) != 1
+                ):
+                    return None
+
+                metric_name = next(
+                    iter(metric_names)
+                )
+                unit = next(iter(units))
+
+                if (
+                    not isinstance(metric_name, str)
+                    or not isinstance(unit, str)
+                ):
+                    return None
+
+                population_ids = {
+                    item.get("institution_id")
+                    for item in full_group
+                    if isinstance(
+                        item.get("institution_id"),
+                        str,
+                    )
+                }
+                if not population_ids:
+                    return None
+
+                group = grouped.get(metric_id)
+
+                if group is None:
+                    group = {
+                        "metric_name": metric_name,
+                        "unit": unit,
+                        "performance_direction": (
+                            performance_direction
+                        ),
+                        "ranking_method": (
+                            ranking_method
+                        ),
+                        "population_size": len(
+                            population_ids
+                        ),
+                        "items": {},
+                    }
+                    grouped[metric_id] = group
+                elif (
+                    group["metric_name"]
+                    != metric_name
+                    or group["unit"] != unit
+                    or group[
+                        "performance_direction"
+                    ]
+                    != performance_direction
+                    or group["ranking_method"]
+                    != ranking_method
+                    or group["population_size"]
+                    != len(population_ids)
+                ):
+                    return None
+
+                items = group["items"]
+
+                for record in selected_group:
+                    institution_id = record.get(
+                        "institution_id"
+                    )
+                    institution_name = record.get(
+                        "institution_name"
+                    )
+                    value = record.get("value")
+                    rank = record.get("rank")
+
+                    if (
+                        not isinstance(
+                            institution_id,
+                            str,
+                        )
+                        or not isinstance(
+                            institution_name,
+                            str,
+                        )
+                        or value is None
+                        or isinstance(rank, bool)
+                        or not isinstance(rank, int)
+                        or rank < 1
+                    ):
+                        return None
+
+                    current = (
+                        institution_name,
+                        value,
+                        rank,
+                    )
+                    previous = items.get(
+                        institution_id
+                    )
+
+                    if (
+                        previous is not None
+                        and previous != current
+                    ):
+                        return None
+
+                    items[institution_id] = current
+
+        if not grouped or len(all_dates) != 1:
+            return None
+
+        period = next(iter(all_dates))
+
+        if target_ids:
+            selection_mode = "target"
+            requested_n = None
+        elif take_directions:
+            if (
+                len(take_directions) != 1
+                or len(take_sizes) != 1
+            ):
+                return None
+
+            direction = next(
+                iter(take_directions)
+            )
+            selection_mode = (
+                "top_n"
+                if direction == "top"
+                else "bottom_n"
+            )
+            requested_n = next(iter(take_sizes))
+        else:
+            selection_mode = "full"
+            requested_n = None
+
+        ordered_metric_ids = [
+            metric_id
+            for metric_id in requested_metric_ids
+            if metric_id in grouped
+        ]
+        ordered_metric_ids.extend(
+            metric_id
+            for metric_id in sorted(grouped)
+            if metric_id
+            not in ordered_metric_ids
+        )
+
+        rankings: list[
+            MetricRankingFacts
+        ] = []
+
+        for metric_id in ordered_metric_ids:
+            group = grouped[metric_id]
+            raw_items = group["items"]
+
+            selected_items = [
+                (
+                    institution_id,
+                    institution_name,
+                    value,
+                    rank,
+                )
+                for (
+                    institution_id,
+                    (
+                        institution_name,
+                        value,
+                        rank,
+                    ),
+                ) in raw_items.items()
+                if (
+                    not target_ids
+                    or institution_id in target_ids
+                )
+            ]
+
+            selected_items.sort(
+                key=lambda item: (
+                    item[3],
+                    item[1],
+                    item[0],
+                )
+            )
+
+            if not selected_items:
+                return None
+
+            rankings.append(
+                MetricRankingFacts(
+                    metric=MetricRef(
+                        metric_id=metric_id,
+                        metric_name=group[
+                            "metric_name"
+                        ],
+                        unit=group["unit"],
+                        performance_direction=group[
+                            "performance_direction"
+                        ],
+                    ),
+                    items=[
+                        RankingItem(
+                            institution=InstitutionRef(
+                                institution_id=(
+                                    institution_id
+                                ),
+                                institution_name=(
+                                    institution_name
+                                ),
+                            ),
+                            value=(
+                                DeterministicQueryPlanExecutor
+                                ._json_scalar(value)
+                            ),
+                            rank=rank,
+                        )
+                        for (
+                            institution_id,
+                            institution_name,
+                            value,
+                            rank,
+                        ) in selected_items
+                    ],
+                    population_size=group[
+                        "population_size"
+                    ],
+                    ranking_method=group[
+                        "ranking_method"
+                    ],
+                )
+            )
+
+        if not rankings:
+            return None
+
+        return RankingOverviewFacts(
+            period=period,
+            rankings=rankings,
+            selection_mode=selection_mode,
+            requested_n=requested_n,
         )
 
     @staticmethod
