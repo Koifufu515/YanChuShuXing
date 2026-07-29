@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from app.adapters.audit.jsonl_logger import JsonlAuditLogger
 from app.adapters.audit.noop_logger import NoOpAuditLogger
 from app.adapters.answering.deterministic_answer_composer import (
     DeterministicAnswerComposer,
@@ -31,6 +32,7 @@ from app.application.pipeline import QueryPipeline
 from app.application.planned_pipeline import PlannedQueryPipeline
 from app.core.data_source import resolve_database_path
 from app.core.settings import Settings
+from app.ports.audit_logger import AuditLogger
 from app.ports.llm_provider import LLMProvider
 from app.ports.query_plan_executor import QueryPlanExecutor
 from app.ports.query_planner import QueryPlanner
@@ -47,6 +49,7 @@ def build_pipeline(
     llm_provider: LLMProvider | None = None,
     query_planner: QueryPlanner | None = None,
     query_plan_executor: QueryPlanExecutor | None = None,
+    audit_logger: AuditLogger | None = None,
 ) -> QueryService:
     resolved_settings = settings or Settings.from_env(PROJECT_ROOT / ".env")
     resolved_database = (
@@ -60,6 +63,17 @@ def build_pipeline(
     )
     is_real = resolved_settings.data_environment == "real"
     database_executor = SQLiteExecutor(resolved_database)
+    resolved_audit_logger = audit_logger or (
+        JsonlAuditLogger(
+            PROJECT_ROOT
+            / "data"
+            / "private"
+            / "audit"
+            / "query_audit.jsonl"
+        )
+        if is_real
+        else NoOpAuditLogger()
+    )
 
     if is_real:
         provider = llm_provider or DeepSeekLLMProvider(
@@ -77,7 +91,7 @@ def build_pipeline(
         return PlannedQueryPipeline(
             query_planner=planner,
             query_plan_executor=executor,
-            audit_logger=NoOpAuditLogger(),
+            audit_logger=resolved_audit_logger,
             answer_composer=DeterministicAnswerComposer(),
             provider_name=resolved_settings.llm_provider,
         )
@@ -95,7 +109,7 @@ def build_pipeline(
         safety_checker=SQLGlotSafetyChecker(),
         database_executor=database_executor,
         result_formatter=TemplateResultFormatter(),
-        audit_logger=NoOpAuditLogger(),
+        audit_logger=resolved_audit_logger,
     )
 
 
