@@ -461,6 +461,22 @@ console.log(JSON.stringify({invalidMessage: invalid.error.message, deniedMessage
         self.assertNotIn('fetch("/api/v1/query"', app_source)
         self.assertIn("download.disabled = !view.columns.length || !view.rows.length", app_source)
         self.assertNotIn("localhost", app_source)
+        self.assertIn(
+            '"/candidate/service-worker.js"',
+            app_source,
+        )
+        self.assertIn(
+            '{ scope: "/candidate" }',
+            app_source,
+        )
+        self.assertNotIn(
+            '"/candidate/assets/service-worker.js"',
+            app_source,
+        )
+        self.assertIn(
+            "let payloadParsed = true;",
+            app_source,
+        )
         self.assertIn('url.pathname.startsWith("/api/")', worker)
         self.assertIn('const CACHE_PREFIX = "yanchushuxing-candidate-"', worker)
         self.assertIn("key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME", worker)

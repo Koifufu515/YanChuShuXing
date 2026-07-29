@@ -858,19 +858,22 @@
     renderSecurityCenter();
     try {
       const response = await apiFetch("/api/v1/security/alerts?limit=50", { method: "GET" });
-      let payload;
+      let payload = {};
+      let payloadParsed = true;
       try { payload = await response.json(); }
-      catch (_) {
-        state.securityStatus = "invalid_response";
-        state.securityError = "服务返回了无法识别的告警数据。";
-        renderSecurityCenter();
-        return;
-      }
+      catch (_) { payloadParsed = false; }
+
       payload = applyAuthenticationResponse(response.status, payload);
       const access = securityAlertAccessPolicy(response.status, payload);
       if (access.status !== "success") {
         state.securityStatus = access.status;
         state.securityError = access.message;
+        renderSecurityCenter();
+        return;
+      }
+      if (!payloadParsed) {
+        state.securityStatus = "invalid_response";
+        state.securityError = "服务返回了无法识别的告警数据。";
         renderSecurityCenter();
         return;
       }
@@ -1001,7 +1004,10 @@
 
   function registerServiceWorker() {
     if (!("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("/candidate/assets/service-worker.js").catch(() => {});
+    navigator.serviceWorker.register(
+      "/candidate/service-worker.js",
+      { scope: "/candidate" },
+    ).catch(() => {});
   }
 
   async function initialize() {
