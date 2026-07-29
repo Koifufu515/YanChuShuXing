@@ -1066,10 +1066,26 @@ class DeterministicQueryPlanExecutor:
 
         period = next(iter(all_dates))
 
-        if target_ids:
-            selection_mode = "target"
-            requested_n = None
-        elif take_directions:
+        population_sizes = {
+            int(group["population_size"])
+            for group in grouped.values()
+        }
+
+        has_partial_take = (
+            bool(take_sizes)
+            and bool(population_sizes)
+            and any(
+                take_size < population_size
+                for take_size in take_sizes
+                for population_size
+                in population_sizes
+            )
+        )
+
+        if take_directions and (
+            not target_ids
+            or has_partial_take
+        ):
             if (
                 len(take_directions) != 1
                 or len(take_sizes) != 1
@@ -1085,6 +1101,9 @@ class DeterministicQueryPlanExecutor:
                 else "bottom_n"
             )
             requested_n = next(iter(take_sizes))
+        elif target_ids:
+            selection_mode = "target"
+            requested_n = None
         else:
             selection_mode = "full"
             requested_n = None

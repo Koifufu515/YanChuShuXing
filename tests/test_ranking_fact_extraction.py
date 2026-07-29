@@ -419,6 +419,131 @@ class RankingFactExtractionTest(
             [1, 2, 3, 3],
         )
 
+    def test_bottom_n_overrides_population_targets(
+        self,
+    ) -> None:
+        ranked = []
+
+        for rank in range(1, 14):
+            institution_id = (
+                f"ORG{rank:03d}"
+            )
+            ranked.append(
+                {
+                    "institution_id": (
+                        institution_id
+                    ),
+                    "institution_name": (
+                        f"江苏省{rank}市农商行"
+                    ),
+                    "date": "2025-12-31",
+                    "metric_id": "ZB013",
+                    "metric_name": "不良贷款率",
+                    "unit": "%",
+                    "value": Decimal(rank) / Decimal(10),
+                    "rank": rank,
+                }
+            )
+
+        plan = {
+            "institutions": {
+                "targets": [
+                    {
+                        "institution_id": (
+                            f"ORG{index:03d}"
+                        ),
+                        "institution_name": (
+                            f"江苏省{index}市农商行"
+                        ),
+                    }
+                    for index in range(1, 14)
+                ],
+                "comparison_population": {
+                    "type": "province_all",
+                    "institution_ids": [
+                        f"ORG{index:03d}"
+                        for index in range(1, 14)
+                    ],
+                },
+            },
+            "metrics": {
+                "requested_metric_ids": [
+                    "ZB013"
+                ],
+                "source_metric_ids": [
+                    "ZB013"
+                ],
+                "concept_ids": [],
+            },
+            "operations": [
+                {
+                    "step": 1,
+                    "operator_id": "OP012",
+                    "input_refs": ["npl_raw"],
+                    "output_ref": "npl_rank",
+                    "parameters": {
+                        "performance_direction": (
+                            "lower_is_better"
+                        ),
+                    },
+                },
+                {
+                    "step": 2,
+                    "operator_id": "OP013",
+                    "input_refs": ["npl_rank"],
+                    "output_ref": "npl_bottom4",
+                    "parameters": {
+                        "n": 4,
+                        "direction": "bottom",
+                    },
+                },
+            ],
+        }
+
+        context = {
+            "npl_rank": ExecutionValue(
+                kind="records",
+                data=ranked,
+                unit="%",
+            ),
+            "npl_bottom4": ExecutionValue(
+                kind="records",
+                data=ranked[-4:],
+                unit="%",
+            ),
+        }
+
+        facts = (
+            DeterministicQueryPlanExecutor
+            ._ranking_overview_facts(
+                plan,
+                context,
+            )
+        )
+
+        self.assertIsInstance(
+            facts,
+            RankingOverviewFacts,
+        )
+        assert facts is not None
+
+        self.assertEqual(
+            facts.selection_mode,
+            "bottom_n",
+        )
+        self.assertEqual(
+            facts.requested_n,
+            4,
+        )
+        self.assertEqual(
+            [
+                item.rank
+                for item
+                in facts.rankings[0].items
+            ],
+            [10, 11, 12, 13],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
