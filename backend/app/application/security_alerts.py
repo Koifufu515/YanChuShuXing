@@ -187,3 +187,17 @@ class SecurityAlertMonitor:
             )
 
         return rules
+
+
+@dataclass(frozen=True)
+class SecurityAlertRecord:
+    occurred_at: datetime
+    alert_type: str
+    severity: str
+    event_count: int
+    window_seconds: int
+    security_action: str
+    trigger_event_type: str
+    trigger_error_code: str | None
+    request_id: str
+    actor_sha256: str

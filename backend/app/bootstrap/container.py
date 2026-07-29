@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.adapters.audit.alerting_logger import AlertingAuditLogger
+from app.adapters.audit.jsonl_alert_reader import JsonlSecurityAlertReader
 from app.adapters.audit.jsonl_logger import JsonlAuditLogger
 from app.adapters.audit.noop_logger import NoOpAuditLogger
 from app.adapters.answering.deterministic_answer_composer import (
@@ -38,6 +39,7 @@ from app.ports.llm_provider import LLMProvider
 from app.ports.query_plan_executor import QueryPlanExecutor
 from app.ports.query_planner import QueryPlanner
 from app.ports.query_service import QueryService
+from app.ports.security_alert_reader import SecurityAlertReader
 from app.ports.sql_generator import SQLGenerator
 
 
@@ -67,6 +69,17 @@ def build_audit_logger(
         )
 
     return NoOpAuditLogger()
+
+
+def build_security_alert_reader(
+) -> SecurityAlertReader:
+    return JsonlSecurityAlertReader(
+        PROJECT_ROOT
+        / "data"
+        / "private"
+        / "audit"
+        / "security_alerts.jsonl"
+    )
 
 
 def build_pipeline(
@@ -219,6 +232,12 @@ def get_audit_logger() -> AuditLogger:
 
 
 @lru_cache(maxsize=1)
+def get_security_alert_reader(
+) -> SecurityAlertReader:
+    return build_security_alert_reader()
+
+
+@lru_cache(maxsize=1)
 def get_pipeline() -> QueryService:
     return build_pipeline(
         settings=get_settings(),
@@ -231,6 +250,9 @@ def configure_dependencies(app: Any) -> None:
         get_query_audit_logger,
         get_query_pipeline,
     )
+    from app.api.security_alerts import (
+        get_security_alert_reader as api_get_security_alert_reader,
+    )
 
     app.dependency_overrides[
         get_query_pipeline
@@ -239,3 +261,7 @@ def configure_dependencies(app: Any) -> None:
     app.dependency_overrides[
         get_query_audit_logger
     ] = get_audit_logger
+
+    app.dependency_overrides[
+        api_get_security_alert_reader
+    ] = get_security_alert_reader

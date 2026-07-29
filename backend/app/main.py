@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.error_handlers import register_error_handlers
 from app.api.query import router as query_router
+from app.api.security_alerts import router as security_alert_router
 from app.bootstrap.container import configure_dependencies
 from app.application.errors import ApplicationError
 from app.bootstrap.container import PROJECT_ROOT
@@ -16,6 +17,7 @@ app = FastAPI(
     description="面向银行经营分析场景的智能问数与协同分析 API",
 )
 app.include_router(query_router)
+app.include_router(security_alert_router)
 register_error_handlers(app)
 configure_dependencies(app)
 
