@@ -20,6 +20,10 @@ from app.adapters.generation.llm_generator import LLMSQLGenerator
 from app.adapters.generation.real_rule_generator import RealRuleSQLGenerator
 from app.adapters.generation.rule_generator import RuleSQLGenerator
 from app.adapters.llm.deepseek_provider import DeepSeekLLMProvider
+from app.adapters.planning.business_concept_fast_planner import (
+    BusinessConceptFastPlanner,
+    RoutingQueryPlanner,
+)
 from app.adapters.planning.llm_query_planner import LLMQueryPlanner
 from app.adapters.safety.sqlglot_checker import SQLGlotSafetyChecker
 from app.application.errors import ConfigurationError
@@ -111,13 +115,20 @@ def _build_query_planner(
         raise ConfigurationError("查询规划器配置文件无法读取。") from exc
     if not isinstance(schema, dict) or not isinstance(context, dict):
         raise ConfigurationError("查询规划器配置文件顶层必须是JSON对象。")
-    return LLMQueryPlanner(
+    fallback_planner = LLMQueryPlanner(
         provider=provider,
         prompt=prompt,
         schema=schema,
         context=context,
         timeout_seconds=settings.llm_timeout_seconds,
         temperature=settings.llm_temperature,
+    )
+    return RoutingQueryPlanner(
+        fast_planner=BusinessConceptFastPlanner(
+            schema=schema,
+            context=context,
+        ),
+        fallback_planner=fallback_planner,
     )
 
 
