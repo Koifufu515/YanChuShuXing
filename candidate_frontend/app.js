@@ -3,6 +3,7 @@
 
   const STORAGE_KEY = "ycsx_candidate_conversations_v1";
   const ACTIVE_KEY = "ycsx_candidate_active_v1";
+  const AUTH_TOKEN_KEY = "ycsx_candidate_auth_token_v1";
   const USER_ID = "competition_demo_user";
   const DESKTOP_DRAWER_QUERY = "(min-width: 1100px)";
   const FOCUSABLE_SELECTOR = 'a[href], button, input, select, textarea, summary, [contenteditable="true"], [tabindex]';
@@ -11,6 +12,7 @@
   const chartInstances = new Set();
   const state = { contract: null, conversations: [], activeId: null, selectedTurn: null, page: "chat", busy: false, suggestions: [] };
   let drawerReturnFocus = null;
+  let authDialogReturnFocus = null;
   let toastTimer = null;
 
   window.addEventListener("resize", () => chartInstances.forEach(chart => chart.resize()));
@@ -64,6 +66,121 @@
     return lines.filter(Boolean).join("\n");
   }
 
+  function getSessionToken() {
+    try {
+      const token = sessionStorage.getItem(AUTH_TOKEN_KEY);
+      return token && token.trim() ? token.trim() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function setSessionToken(token) {
+    const value = typeof token === "string" ? token.trim() : "";
+    if (!value) return false;
+    try {
+      sessionStorage.setItem(AUTH_TOKEN_KEY, value);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function clearSessionToken() {
+    try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (_) {}
+  }
+
+  function buildApiHeaders(baseHeaders = {}) {
+    const headers = { ...baseHeaders };
+    const token = getSessionToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  }
+
+  function buildQueryBody(question, conversationId, confirmation = null) {
+    const body = { question, user_id: USER_ID, conversation_id: conversationId };
+    if (confirmation) body.confirmation = confirmation;
+    return body;
+  }
+
+  function apiFetch(url, options = {}) {
+    return fetch(url, { ...options, headers: buildApiHeaders(options.headers || {}) });
+  }
+
+  function isAuthenticationError(status, payload) {
+    const code = payload?.error?.code;
+    return status === 401 || code === "AUTHENTICATION_REQUIRED" || code === "INVALID_AUTHENTICATION";
+  }
+
+  function authenticationPolicy(status, payload) {
+    if (isAuthenticationError(status, payload)) {
+      const invalid = payload?.error?.code === "INVALID_AUTHENTICATION" || Boolean(getSessionToken());
+      return {
+        clearToken: true,
+        openDialog: true,
+        retry: false,
+        message: invalid
+          ? "访问凭证无效或已经失效，请重新连接后手动发送问题。"
+          : "缺少访问凭证，请连接后手动发送问题。",
+      };
+    }
+    if (status === 403 || payload?.error?.code === "ACCESS_DENIED") {
+      return {
+        clearToken: false,
+        openDialog: false,
+        retry: false,
+        message: "当前账号无权访问相关机构或字段。",
+      };
+    }
+    return { clearToken: false, openDialog: false, retry: false, message: null };
+  }
+
+  function updateAuthStatus() {
+    const connected = Boolean(getSessionToken());
+    const status = $("#auth-status");
+    const logout = $("#auth-logout");
+    if (status) status.textContent = connected ? "已连接" : "未连接";
+    if (logout) logout.disabled = !connected;
+  }
+
+  function openAuthDialog(message = "", trigger = null) {
+    const dialog = $("#auth-dialog");
+    const input = $("#auth-token");
+    const messageBox = $("#auth-message");
+    if (!dialog) return;
+    authDialogReturnFocus = trigger || document.activeElement;
+    if (input) input.value = "";
+    if (messageBox) messageBox.textContent = message;
+    updateAuthStatus();
+    if (!dialog.open) dialog.showModal();
+    requestAnimationFrame(() => input?.focus());
+  }
+
+  function applyAuthenticationResponse(status, payload) {
+    const result = payload && typeof payload === "object" ? payload : {};
+    const policy = authenticationPolicy(status, result);
+    if (!policy.message) return result;
+    if (!result.error || typeof result.error !== "object") result.error = {};
+    result.error.code = result.error.code || (status === 403 ? "ACCESS_DENIED" : "AUTHENTICATION_REQUIRED");
+    result.error.message = policy.message;
+    result.error.retryable = false;
+    if (policy.clearToken) {
+      clearSessionToken();
+      updateAuthStatus();
+    }
+    if (policy.openDialog) openAuthDialog(policy.message);
+    return result;
+  }
+
+  function logoutAuthSession() {
+    clearSessionToken();
+    updateAuthStatus();
+    const input = $("#auth-token");
+    if (input) input.value = "";
+    $("#auth-dialog")?.close();
+    showToast("已退出访问凭证会话");
+  }
+
   window.YCSXCandidateUtils = Object.freeze({
     csvEscape,
     buildCsv,
@@ -76,6 +193,15 @@
     trapDrawerFocus,
     handleDrawerKeydown,
     handleDrawerBreakpointChange,
+    getSessionToken,
+    setSessionToken,
+    clearSessionToken,
+    buildApiHeaders,
+    buildQueryBody,
+    isAuthenticationError,
+    authenticationPolicy,
+    applyAuthenticationResponse,
+    logoutAuthSession,
   });
 
   function loadConversations() {
@@ -188,6 +314,7 @@
   }
 
   function handleDrawerKeydown(event) {
+    if ($("#auth-dialog")?.open) return false;
     if (event.key === "Escape" && document.body.classList.contains("drawer-open")) {
       closeDrawers();
       return true;
@@ -469,6 +596,12 @@
     if(waiting){ body.append(renderConfirmation(turn,index,payload)); }
     else if (payload.error) {
       const spec = state.contract.error_states[payload.error.code] || ["查询失败", "查询未完成，请稍后重试。"]; const error = node("div", "error-card"); error.append(node("strong", "", spec[0])); error.append(node("span", "", payload.error.message || spec[1])); body.append(error);
+      if (isAuthenticationError(null, payload)) {
+        const retry = node("button", "ghost auth-retry", "重新发送");
+        retry.type = "button";
+        retry.dataset.authRetryTurn = String(index);
+        body.append(retry);
+      }
     } else {
       if(payload.confirmation?.status==="confirmed") { const final=node("section","final-conditions");final.append(node("strong","","最终采用条件"),node("span","",finalConditionsText(payload.confirmation)));body.append(final); }
       if (view.structured?.headline) body.append(node("h3", "answer-headline", view.structured.headline));
@@ -547,8 +680,9 @@
     const turn={question:text,pending:true,createdAt:new Date().toISOString(),elapsedMs:0,payload:null}; conversation.turns.push(turn); conversation.updatedAt=turn.createdAt; state.selectedTurn=conversation.turns.length-1; state.busy=true; persist(); render(); $("#send").disabled=true;
     const started=performance.now();
     try {
-      const response=await fetch("/api/v1/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:text,user_id:USER_ID,conversation_id:conversation.id})});
+      const response=await apiFetch("/api/v1/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(buildQueryBody(text,conversation.id))});
       let payload; try { payload=await response.json(); } catch(_){ payload={error:{code:"INVALID_RESPONSE",message:"服务返回了无法识别的内容。",retryable:true},columns:[],rows:[]}; }
+      payload=applyAuthenticationResponse(response.status,payload);
       if(!response.ok&&!payload.error) payload.error={code:`HTTP_${response.status}`,message:"查询服务暂时未完成请求。",retryable:response.status>=500};
       turn.payload=payload;
     } catch (_) { turn.payload={question:text,columns:[],rows:[],warnings:[],error:{code:"NETWORK_ERROR",message:"无法连接言出数行服务，请确认后端已经启动。",retryable:true},metadata:null}; }
@@ -563,8 +697,9 @@
     turn.pending=true;state.busy=true;state.selectedTurn=index;persist();render();$("#send").disabled=true;
     const started=performance.now();
     try{
-      const response=await fetch("/api/v1/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:turn.question,user_id:USER_ID,conversation_id:conversation.id,confirmation:{token:confirmation.token,selections}})});
+      const response=await apiFetch("/api/v1/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(buildQueryBody(turn.question,conversation.id,{token:confirmation.token,selections}))});
       let payload;try{payload=await response.json();}catch(_){payload={error:{code:"INVALID_RESPONSE",message:"服务返回了无法识别的内容。",retryable:true},columns:[],rows:[]};}
+      payload=applyAuthenticationResponse(response.status,payload);
       if(!response.ok&&!payload.error)payload.error={code:`HTTP_${response.status}`,message:"查询服务暂时未完成请求。",retryable:response.status>=500};
       turn.payload=payload;
     }catch(_){turn.payload={question:turn.question,columns:[],rows:[],warnings:[],error:{code:"NETWORK_ERROR",message:"无法连接言出数行服务，请确认后端已经启动。",retryable:true},metadata:null,confirmation};}
@@ -590,7 +725,7 @@
     $("#history-list").addEventListener("click",event=>{const target=event.target.closest("[data-conversation-id]");if(!target)return;state.activeId=target.dataset.conversationId;const conversation=activeConversation();state.selectedTurn=conversation?.turns?.length?conversation.turns.length-1:null;state.page="chat";persist();closeDrawers();render();});
     document.querySelector("nav").addEventListener("click",event=>{const target=event.target.closest("[data-page]");if(target)setPage(target.dataset.page);});
     $("#message-scroll").addEventListener("change",event=>{const select=event.target.closest("[data-confirm-field]");if(!select)return;const conversation=activeConversation(),turn=conversation?.turns?.[Number(select.dataset.turnIndex)];if(!turn)return;turn.confirmationSelections={...(turn.confirmationSelections||{})};if(select.value)turn.confirmationSelections[select.dataset.confirmField]=select.value;else delete turn.confirmationSelections[select.dataset.confirmField];persist();renderMessages();renderDetails();});
-    $("#message-scroll").addEventListener("click",event=>{const copy=event.target.closest("[data-copy-turn]");if(copy){copyAnalysis(Number(copy.dataset.copyTurn));return;}const download=event.target.closest("[data-export-turn]");if(download){exportCurrentTable(Number(download.dataset.exportTurn));return;}const confirm=event.target.closest("[data-confirm-turn]");if(confirm){confirmTurn(Number(confirm.dataset.confirmTurn));return;}const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}if(event.target.closest("[data-confirm-field],.confirmation-option"))return;const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
+    $("#message-scroll").addEventListener("click",event=>{const authRetry=event.target.closest("[data-auth-retry-turn]");if(authRetry){const turn=activeConversation()?.turns?.[Number(authRetry.dataset.authRetryTurn)];if(turn)submitQuestion(turn.question);return;}const copy=event.target.closest("[data-copy-turn]");if(copy){copyAnalysis(Number(copy.dataset.copyTurn));return;}const download=event.target.closest("[data-export-turn]");if(download){exportCurrentTable(Number(download.dataset.exportTurn));return;}const confirm=event.target.closest("[data-confirm-turn]");if(confirm){confirmTurn(Number(confirm.dataset.confirmTurn));return;}const edit=event.target.closest("[data-edit-turn]");if(edit){const turn=activeConversation()?.turns?.[Number(edit.dataset.editTurn)];if(turn){$("#question").value=turn.question;$("#question").focus();}return;}const suggestion=event.target.closest("[data-question]");if(suggestion){$("#question").value=suggestion.dataset.question;submitQuestion(suggestion.dataset.question);return;}if(event.target.closest("[data-confirm-field],.confirmation-option"))return;const answer=event.target.closest("[data-turn-index]");if(answer){state.selectedTurn=Number(answer.dataset.turnIndex);renderMessages();renderDetails();}});
     $("#composer").addEventListener("submit",event=>{event.preventDefault();const field=$("#question");const question=field.value;field.value="";submitQuestion(question);});
     $("#question").addEventListener("keydown",event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("#composer").requestSubmit();}});
     $("#open-conversations").addEventListener("click",event=>openDrawer("conversation",event.currentTarget));
@@ -599,7 +734,31 @@
     $("#drawer-scrim").addEventListener("click",()=>closeDrawers());
     document.addEventListener("keydown",handleDrawerKeydown);
     window.matchMedia(DESKTOP_DRAWER_QUERY).addEventListener("change",handleDrawerBreakpointChange);
+    $("#open-auth").addEventListener("click",event=>openAuthDialog("",event.currentTarget));
+    $("#auth-close").addEventListener("click",()=>$("#auth-dialog").close());
+    $("#auth-cancel").addEventListener("click",()=>$("#auth-dialog").close());
+    $("#auth-logout").addEventListener("click",logoutAuthSession);
+    $("#auth-form").addEventListener("submit",event=>{
+      event.preventDefault();
+      const input=$("#auth-token"),connect=$("#auth-connect"),message=$("#auth-message");
+      connect.disabled=true;
+      const stored=setSessionToken(input.value);
+      input.value="";
+      if(!stored){message.textContent="请输入有效的访问凭证。";connect.disabled=false;input.focus();return;}
+      updateAuthStatus();
+      message.textContent="";
+      connect.disabled=false;
+      $("#auth-dialog").close();
+      showToast("访问凭证已保存");
+    });
+    $("#auth-dialog").addEventListener("close",()=>{
+      $("#auth-token").value="";
+      $("#auth-connect").disabled=false;
+      if(authDialogReturnFocus&&typeof authDialogReturnFocus.focus==="function"&&!authDialogReturnFocus.inert)authDialogReturnFocus.focus();
+      authDialogReturnFocus=null;
+    });
     syncDrawerAccessibility();
+    updateAuthStatus();
   }
 
   function registerServiceWorker() {
