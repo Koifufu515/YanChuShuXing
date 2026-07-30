@@ -1581,6 +1581,9 @@ def validate_business_rules(
             "后3名",
             "后三家",
             "后3家",
+            # COMPOSITE_TOP_BOTTOM_LANGUAGE_FIX
+            "后三",
+            "后3",
             "倒数",
         )
     )

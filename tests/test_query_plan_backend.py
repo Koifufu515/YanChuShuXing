@@ -2786,7 +2786,7 @@ class FinalBaselineRegressionTest(unittest.TestCase):
         errors = validate_business_rules(
             plan,
             self.context,
-            "2025年8月末，全省净利润排最后一名的是哪家？",
+            "2025年8月末，全省净利润按数值排名最后一名的是哪家？",
         )
 
         self.assertTrue(
