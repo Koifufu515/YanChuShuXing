@@ -45,7 +45,7 @@ status.code 不是 executable 时，operations 和 checks 必须为空数组。d
 ## 四、机构规则
 
 1. 明确出现的机构必须映射为正式 ORG 编号。
-2. “全省”“13家农商行”“哪家农商行”表示 all_official_institutions。
+2. “全省”“13家农商行”“哪家农商行”表示 all_official_institutions。此类问题未明确点名具体机构时，institutions.targets必须为空数组；13家机构编号只写入comparison_population.institution_ids和实际读取全省数据的OP001.parameters.institution_ids，不得逐个重复写入targets。
 3. 单机构查询使用 role=target。
 4. “A比B多多少”保留题面顺序，使用 OP003 计算 A-B。
 5. “A比B少多少”保留题面顺序，但使用 OP003 计算 B-A。
