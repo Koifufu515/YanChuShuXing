@@ -152,6 +152,84 @@ class BusinessConceptFastPlannerTest(unittest.TestCase):
             },
         )
 
+    def test_short_generic_metrics_question_uses_fast_path(
+        self,
+    ) -> None:
+        router, fallback = self.build_router()
+
+        question = (
+            "江苏省F市农商行在2025-11-30的"
+            "指标中哪些表现较好？哪些表现较差？"
+        )
+
+        result = router.plan(question)
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            result.model,
+            "deterministic-business-concept",
+        )
+        self.assertEqual(
+            result.query_plan["time"]["mode"],
+            "point",
+        )
+        self.assertEqual(
+            result.query_plan["time"]["dates"],
+            ["2025-11-30"],
+        )
+        self.assertEqual(fallback.questions, [])
+
+    def test_chinese_date_paraphrase_uses_fast_path(
+        self,
+    ) -> None:
+        router, fallback = self.build_router()
+
+        question = (
+            "请分析江苏省E市农商行在"
+            "2026年2月28日的主要经营指标及"
+            "全省排名，说明哪些指标表现较好，"
+            "哪些指标表现较差。"
+        )
+
+        result = router.plan(question)
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            result.model,
+            "deterministic-business-concept",
+        )
+        self.assertEqual(
+            result.query_plan["time"]["mode"],
+            "point",
+        )
+        self.assertEqual(
+            result.query_plan["time"]["dates"],
+            ["2026-02-28"],
+        )
+        self.assertEqual(fallback.questions, [])
+
+    def test_explicit_metric_subset_uses_fallback(
+        self,
+    ) -> None:
+        router, fallback = self.build_router()
+
+        question = (
+            "江苏省F市农商行在2025-11-30的"
+            "存款和贷款指标中哪些表现较好？"
+            "哪些表现较差？"
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "进入 DeepSeek 回退规划器",
+        ):
+            router.plan(question)
+
+        self.assertEqual(
+            fallback.questions,
+            [question],
+        )
+
     def test_other_question_uses_fallback(self) -> None:
         router, fallback = self.build_router()
 

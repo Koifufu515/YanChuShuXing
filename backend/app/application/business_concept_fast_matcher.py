@@ -8,7 +8,29 @@ from datetime import date
 from typing import Any
 
 
-_DATE_PATTERN = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
+_ISO_DATE_PATTERN = re.compile(
+    r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)"
+)
+_CHINESE_DATE_PATTERN = re.compile(
+    r"(?<!\d)(\d{4})年"
+    r"(\d{1,2})月"
+    r"(\d{1,2})日"
+    r"(?!\d)"
+)
+
+_SPECIFIC_METRIC_HINTS = (
+    "存款",
+    "贷款",
+    "存贷比",
+    "不良率",
+    "不良贷款率",
+    "拨备覆盖率",
+    "资本充足率",
+    "逾期率",
+    "逾期贷款率",
+    "净利润",
+    "成本收入比",
+)
 
 
 @dataclass(frozen=True)
@@ -21,6 +43,36 @@ class MainMetricsQueryMatch:
 def _normalize_text(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value)
     return re.sub(r"\s+", "", normalized)
+
+
+def _extract_single_date(
+    value: str,
+) -> str | None:
+    matched_dates = {
+        match.group(1)
+        for match in _ISO_DATE_PATTERN.finditer(
+            value
+        )
+    }
+
+    for match in _CHINESE_DATE_PATTERN.finditer(
+        value
+    ):
+        try:
+            canonical = date(
+                int(match.group(1)),
+                int(match.group(2)),
+                int(match.group(3)),
+            ).isoformat()
+        except ValueError:
+            return None
+
+        matched_dates.add(canonical)
+
+    if len(matched_dates) != 1:
+        return None
+
+    return next(iter(matched_dates))
 
 
 def match_main_metrics_query(
@@ -39,21 +91,42 @@ def match_main_metrics_query(
     )
 
     if not (
-        "主要经营指标" in normalized_question
-        and "排名" in normalized_question
-        and has_good_request
+        has_good_request
         and has_bad_request
     ):
         return None
 
-    matched_dates = {
-        match.group(1)
-        for match in _DATE_PATTERN.finditer(normalized_question)
-    }
-    if len(matched_dates) != 1:
+    explicit_main_metrics = (
+        "主要经营指标"
+        in normalized_question
+    )
+    generic_metric_scope = any(
+        phrase in normalized_question
+        for phrase in (
+            "指标中",
+            "各项指标",
+            "全部指标",
+            "所有指标",
+            "这些指标",
+        )
+    )
+
+    if explicit_main_metrics:
+        pass
+    elif generic_metric_scope:
+        if any(
+            hint in normalized_question
+            for hint in _SPECIFIC_METRIC_HINTS
+        ):
+            return None
+    else:
         return None
 
-    data_date = next(iter(matched_dates))
+    data_date = _extract_single_date(
+        normalized_question
+    )
+    if data_date is None:
+        return None
 
     try:
         query_date = date.fromisoformat(data_date)
