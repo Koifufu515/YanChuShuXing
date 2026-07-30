@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -17,10 +18,18 @@ _MAIN_METRIC_DIRECTIONS = {
 _MAIN_METRICS = (*_MAIN_METRIC_DIRECTIONS, "ZB022")
 
 
-def normalize_query_plan(plan: dict[str, Any]) -> dict[str, Any]:
+def normalize_query_plan(
+    plan: dict[str, Any],
+    question: str | None = None,
+) -> dict[str, Any]:
     """Apply deterministic, idempotent repairs for frozen business concepts."""
     normalized = deepcopy(plan)
     _complete_metric_completeness_check(normalized)
+    if isinstance(question, str):
+        _complete_scalar_extreme_operator(
+            normalized,
+            question,
+        )
     if not _requires_main_metric_ranking_completion(normalized):
         return normalized
 
@@ -142,6 +151,178 @@ def normalize_query_plan(plan: dict[str, Any]) -> dict[str, Any]:
     for step, operation in enumerate(operations, start=1):
         operation["step"] = step
     return normalized
+
+
+def _complete_scalar_extreme_operator(
+    plan: dict[str, Any],
+    question: str,
+) -> None:
+    extreme_type = _scalar_extreme_type(question)
+    if extreme_type is None:
+        return
+
+    status = plan.get("status")
+    if (
+        not isinstance(status, dict)
+        or status.get("code") != "executable"
+    ):
+        return
+
+    operations = plan.get("operations")
+    if (
+        not isinstance(operations, list)
+        or len(operations) < 2
+        or not all(
+            isinstance(operation, dict)
+            for operation in operations
+        )
+    ):
+        return
+
+    selection = operations[-1]
+    selection_parameters = selection.get("parameters")
+    selection_refs = selection.get("input_refs")
+    if (
+        selection.get("operator_id") != "OP013"
+        or not isinstance(selection_parameters, dict)
+        or selection_parameters.get("n") != 1
+        or not isinstance(selection_refs, list)
+        or len(selection_refs) != 1
+        or not isinstance(selection_refs[0], str)
+    ):
+        return
+
+    ranking_index = next(
+        (
+            index
+            for index, operation in enumerate(operations)
+            if operation.get("output_ref")
+            == selection_refs[0]
+        ),
+        None,
+    )
+    if ranking_index != len(operations) - 2:
+        return
+
+    ranking = operations[ranking_index]
+    ranking_refs = ranking.get("input_refs")
+    if (
+        ranking.get("operator_id")
+        not in {"OP011", "OP012"}
+        or not isinstance(ranking_refs, list)
+        or len(ranking_refs) != 1
+        or not isinstance(ranking_refs[0], str)
+        or not isinstance(
+            selection.get("output_ref"),
+            str,
+        )
+    ):
+        return
+
+    operations[ranking_index:] = [
+        {
+            "step": ranking_index + 1,
+            "operator_id": "OP014",
+            "input_refs": list(ranking_refs),
+            "output_ref": selection["output_ref"],
+            "parameters": {
+                "type": extreme_type,
+            },
+        }
+    ]
+    for step, operation in enumerate(
+        operations,
+        start=1,
+    ):
+        operation["step"] = step
+
+    checks = plan.get("checks")
+    if isinstance(checks, list):
+        plan["checks"] = [
+            check
+            for check in checks
+            if not (
+                isinstance(check, dict)
+                and check.get("type")
+                == "tie_preservation"
+            )
+        ]
+
+    output = plan.get("output")
+    if isinstance(output, dict):
+        output["answer_type"] = "extreme_value"
+        output["result_fields"] = [
+            "institution_id",
+            "metric_value",
+        ]
+        output["tie_policy"] = None
+
+
+def _scalar_extreme_type(
+    question: str,
+) -> str | None:
+    asks_institution = any(
+        phrase in question
+        for phrase in (
+            "哪家",
+            "哪一家",
+            "哪个机构",
+            "哪个银行",
+            "哪家银行",
+            "哪个农商行",
+            "哪家农商行",
+        )
+    )
+    if not asks_institution:
+        return None
+
+    asks_high = any(
+        word in question
+        for word in ("最高", "最大")
+    )
+    asks_low = any(
+        word in question
+        for word in ("最低", "最小")
+    )
+    if asks_high == asks_low:
+        return None
+
+    if any(
+        phrase in question
+        for phrase in (
+            "排名",
+            "名次",
+            "排第几",
+            "排第一",
+            "排最后",
+        )
+    ):
+        return None
+
+    if (
+        re.search(
+            (
+                r"(?:最高|最低|最大|最小).{0,4}"
+                r"(?:\d+|[一二两三四五六七八九十]+)家"
+            ),
+            question,
+        )
+        is not None
+    ):
+        return None
+
+    if any(
+        phrase in question
+        for phrase in (
+            "最低要求",
+            "监管要求",
+            "监管标准",
+            "达标要求",
+        )
+    ):
+        return None
+
+    return "max" if asks_high else "min"
 
 
 def _complete_metric_completeness_check(

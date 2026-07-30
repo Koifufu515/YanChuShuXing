@@ -2039,8 +2039,67 @@ def validate_business_rules(
     asks_low_extreme = any(
         word in question for word in ("最低", "最小")
     )
+    asks_rank_language = any(
+        phrase in question
+        for phrase in (
+            "排名",
+            "名次",
+            "排第几",
+            "排第一",
+            "排最后",
+        )
+    )
+    asks_numeric_top_n_extreme = (
+        re.search(
+            (
+                r"(?:最高|最低|最大|最小).{0,4}"
+                r"(?:\d+|[一二两三四五六七八九十]+)家"
+            ),
+            question,
+        )
+        is not None
+    )
+    asks_threshold_floor = any(
+        phrase in question
+        for phrase in (
+            "最低要求",
+            "监管要求",
+            "监管标准",
+            "达标要求",
+        )
+    )
+    uses_scalar_extreme_language = (
+        not asks_rank_language
+        and not asks_numeric_top_n_extreme
+        and not asks_threshold_floor
+    )
 
-    if asks_high_extreme and asks_low_extreme:
+    if (
+        asks_high_extreme != asks_low_extreme
+        and uses_scalar_extreme_language
+    ):
+        expected_type = "max" if asks_high_extreme else "min"
+        label = (
+            "最高或最大"
+            if expected_type == "max"
+            else "最低或最小"
+        )
+        if expected_type not in op014_types:
+            errors.append(
+                {
+                    "path": "operations",
+                    "message": (
+                        f"题目询问单一{label}值，必须使用OP014，"
+                        f"且parameters.type={expected_type}。"
+                    ),
+                }
+            )
+
+    if (
+        asks_high_extreme
+        and asks_low_extreme
+        and uses_scalar_extreme_language
+    ):
         if "max" not in op014_types or "min" not in op014_types:
             errors.append(
                 {

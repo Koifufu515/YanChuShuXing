@@ -158,7 +158,10 @@ class LLMQueryPlanner:
         question: str,
     ) -> tuple[QueryPlanValidation, float, float, float]:
         validation_started = time.perf_counter()
-        plan = normalize_query_plan(plan)
+        plan = normalize_query_plan(
+            plan,
+            question=question,
+        )
         schema_started = time.perf_counter()
         schema_errors = sorted(
             self.validator.iter_errors(plan),

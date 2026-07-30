@@ -1543,6 +1543,209 @@ class QueryPlanContractTest(unittest.TestCase):
 
         self.assertIn("OP019", messages)
 
+    def test_single_scalar_extreme_requires_matching_op014(self):
+        ids = [
+            f"ORG{index:03d}"
+            for index in range(1, 14)
+        ]
+
+        def make_plan(operations):
+            plan = base_plan(
+                operations=operations,
+                checks=[
+                    {
+                        "type": "record_exists",
+                        "parameters": {
+                            "metric_ids": ["ZB013"],
+                        },
+                    },
+                    {
+                        "type": "institution_completeness",
+                        "parameters": {
+                            "institution_ids": ids,
+                        },
+                    },
+                    {
+                        "type": "unrounded_comparison",
+                        "parameters": {
+                            "metric_ids": ["ZB013"],
+                        },
+                    },
+                ],
+            )
+            plan["metrics"] = {
+                "requested_metric_ids": ["ZB013"],
+                "source_metric_ids": ["ZB013"],
+                "concept_ids": [],
+            }
+            plan["institutions"]["comparison_population"] = {
+                "type": "all_official_institutions",
+                "institution_ids": ids,
+            }
+            return plan
+
+        cases = {
+            "ranking_chain_without_op014": [
+                {
+                    "step": 1,
+                    "operator_id": "OP001",
+                    "input_refs": ["ZB013"],
+                    "output_ref": "all_values",
+                    "parameters": {
+                        "institution_ids": ids,
+                        "date": "2025-12-31",
+                    },
+                },
+                {
+                    "step": 2,
+                    "operator_id": "OP012",
+                    "input_refs": ["all_values"],
+                    "output_ref": "ranked",
+                    "parameters": {
+                        "metric_id": "ZB013",
+                        "performance_direction": "lower_is_better",
+                    },
+                },
+                {
+                    "step": 3,
+                    "operator_id": "OP013",
+                    "input_refs": ["ranked"],
+                    "output_ref": "first",
+                    "parameters": {
+                        "n": 1,
+                        "direction": "top",
+                    },
+                },
+            ],
+            "op014_with_wrong_direction": [
+                {
+                    "step": 1,
+                    "operator_id": "OP001",
+                    "input_refs": ["ZB013"],
+                    "output_ref": "all_values",
+                    "parameters": {
+                        "institution_ids": ids,
+                        "date": "2025-12-31",
+                    },
+                },
+                {
+                    "step": 2,
+                    "operator_id": "OP014",
+                    "input_refs": ["all_values"],
+                    "output_ref": "maximum",
+                    "parameters": {
+                        "type": "max",
+                    },
+                },
+            ],
+        }
+
+        for name, operations in cases.items():
+            with self.subTest(name=name):
+                errors = validate_business_rules(
+                    make_plan(operations),
+                    self.context,
+                    "13家农商行中不良贷款率最低的是哪家？",
+                )
+                messages = " ".join(
+                    error["message"]
+                    for error in errors
+                )
+
+                self.assertIn(
+                    "必须使用OP014，且parameters.type=min",
+                    messages,
+                )
+
+    def test_numeric_top_n_is_not_scalar_extreme(self):
+        ids = [
+            f"ORG{index:03d}"
+            for index in range(1, 14)
+        ]
+        plan = base_plan(
+            operations=[
+                {
+                    "step": 1,
+                    "operator_id": "OP001",
+                    "input_refs": ["ZB013"],
+                    "output_ref": "all_values",
+                    "parameters": {
+                        "institution_ids": ids,
+                        "date": "2025-12-31",
+                    },
+                },
+                {
+                    "step": 2,
+                    "operator_id": "OP011",
+                    "input_refs": ["all_values"],
+                    "output_ref": "ascending_values",
+                    "parameters": {
+                        "order": "ascending",
+                    },
+                },
+                {
+                    "step": 3,
+                    "operator_id": "OP013",
+                    "input_refs": ["ascending_values"],
+                    "output_ref": "lowest_three",
+                    "parameters": {
+                        "n": 3,
+                        "direction": "top",
+                    },
+                },
+            ],
+            checks=[
+                {
+                    "type": "record_exists",
+                    "parameters": {
+                        "metric_ids": ["ZB013"],
+                    },
+                },
+                {
+                    "type": "institution_completeness",
+                    "parameters": {
+                        "institution_ids": ids,
+                    },
+                },
+                {
+                    "type": "unrounded_comparison",
+                    "parameters": {
+                        "metric_ids": ["ZB013"],
+                    },
+                },
+                {
+                    "type": "tie_preservation",
+                    "parameters": {
+                        "metric_ids": ["ZB013"],
+                    },
+                },
+            ],
+        )
+        plan["metrics"] = {
+            "requested_metric_ids": ["ZB013"],
+            "source_metric_ids": ["ZB013"],
+            "concept_ids": [],
+        }
+        plan["institutions"]["comparison_population"] = {
+            "type": "all_official_institutions",
+            "institution_ids": ids,
+        }
+
+        errors = validate_business_rules(
+            plan,
+            self.context,
+            "13家农商行中不良贷款率数值最低3家是哪些？",
+        )
+        messages = " ".join(
+            error["message"]
+            for error in errors
+        )
+
+        self.assertNotIn(
+            "题目询问单一最低或最小值",
+            messages,
+        )
+
     def test_dynamic_province_average_filter_requires_difference_step(self):
         ids = [f"ORG{index:03d}" for index in range(1, 14)]
         plan = base_plan(
@@ -3725,6 +3928,180 @@ class QueryPlanMetricCompletenessNormalizationTest(unittest.TestCase):
                 normalized = normalize_query_plan(plan)
 
                 self.assertEqual(normalized["checks"], [])
+
+
+class QueryPlanScalarExtremeNormalizationTest(
+    unittest.TestCase
+):
+    @staticmethod
+    def _ranking_plan():
+        return {
+            "status": {
+                "code": "executable",
+            },
+            "operations": [
+                {
+                    "step": 1,
+                    "operator_id": "OP001",
+                    "input_refs": ["ZB013"],
+                    "output_ref": "all_values",
+                    "parameters": {
+                        "institution_ids": [
+                            "ORG001",
+                            "ORG002",
+                        ],
+                        "date": "2025-12-31",
+                    },
+                },
+                {
+                    "step": 2,
+                    "operator_id": "OP012",
+                    "input_refs": ["all_values"],
+                    "output_ref": "ranked",
+                    "parameters": {
+                        "metric_id": "ZB013",
+                        "performance_direction":
+                            "lower_is_better",
+                    },
+                },
+                {
+                    "step": 3,
+                    "operator_id": "OP013",
+                    "input_refs": ["ranked"],
+                    "output_ref": "lowest_npl",
+                    "parameters": {
+                        "n": 1,
+                        "direction": "top",
+                    },
+                },
+            ],
+            "checks": [
+                {
+                    "type": "record_exists",
+                    "parameters": {
+                        "metric_ids": ["ZB013"],
+                    },
+                },
+                {
+                    "type": "unrounded_comparison",
+                    "parameters": {
+                        "metric_ids": ["ZB013"],
+                    },
+                },
+                {
+                    "type": "tie_preservation",
+                    "parameters": {
+                        "metric_ids": ["ZB013"],
+                    },
+                },
+            ],
+            "output": {
+                "answer_type": "ranking",
+                "result_fields": [
+                    "institution_id",
+                    "metric_value",
+                    "rank",
+                ],
+                "unit": "%",
+                "rounding": {
+                    "mode": "final_only",
+                    "digits": 2,
+                },
+                "tie_policy": "preserve_all",
+            },
+        }
+
+    def test_converts_single_institution_extreme_chain(self):
+        original = self._ranking_plan()
+
+        normalized = normalize_query_plan(
+            original,
+            question=(
+                "13家农商行中，2025年12月31日"
+                "不良贷款率最低的是哪家？"
+            ),
+        )
+
+        self.assertEqual(
+            [
+                operation["operator_id"]
+                for operation in normalized["operations"]
+            ],
+            ["OP001", "OP014"],
+        )
+        self.assertEqual(
+            normalized["operations"][-1],
+            {
+                "step": 2,
+                "operator_id": "OP014",
+                "input_refs": ["all_values"],
+                "output_ref": "lowest_npl",
+                "parameters": {
+                    "type": "min",
+                },
+            },
+        )
+        self.assertEqual(
+            normalized["output"]["answer_type"],
+            "extreme_value",
+        )
+        self.assertEqual(
+            normalized["output"]["result_fields"],
+            ["institution_id", "metric_value"],
+        )
+        self.assertIsNone(
+            normalized["output"]["tie_policy"]
+        )
+        self.assertFalse(
+            any(
+                check.get("type")
+                == "tie_preservation"
+                for check in normalized["checks"]
+            )
+        )
+        self.assertEqual(
+            [
+                operation["operator_id"]
+                for operation in original["operations"]
+            ],
+            ["OP001", "OP012", "OP013"],
+        )
+        self.assertEqual(
+            normalize_query_plan(
+                normalized,
+                question=(
+                    "13家农商行中，2025年12月31日"
+                    "不良贷款率最低的是哪家？"
+                ),
+            ),
+            normalized,
+        )
+
+    def test_preserves_ranking_top_n_and_threshold_language(
+        self,
+    ):
+        questions = [
+            "不良贷款率排名第一的是哪家？",
+            "不良贷款率数值最低3家是哪些？",
+            "不良贷款率最低监管要求是多少？",
+        ]
+
+        for question in questions:
+            with self.subTest(question=question):
+                plan = self._ranking_plan()
+                normalized = normalize_query_plan(
+                    plan,
+                    question=question,
+                )
+
+                self.assertEqual(
+                    [
+                        operation["operator_id"]
+                        for operation
+                        in normalized["operations"]
+                    ],
+                    ["OP001", "OP012", "OP013"],
+                )
 
 
 if __name__ == "__main__":
