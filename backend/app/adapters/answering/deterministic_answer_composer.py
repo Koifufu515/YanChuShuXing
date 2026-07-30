@@ -258,7 +258,11 @@ class DeterministicAnswerComposer:
             ranking_parts = [
                 (
                     f"{ranking.metric.metric_name}"
-                    f"第{item.rank}名"
+                    + self._ranking_position_text(
+                        item.rank,
+                        ranking.ranking_method,
+                        ranking.metric.performance_direction,
+                    )
                 )
                 for ranking in facts.rankings
                 for item in ranking.items
@@ -276,7 +280,11 @@ class DeterministicAnswerComposer:
                 headline = (
                     f"{subject}"
                     f"{ranking.metric.metric_name}"
-                    f"排名第{item.rank}名"
+                    + self._ranking_position_text(
+                        item.rank,
+                        ranking.ranking_method,
+                        ranking.metric.performance_direction,
+                    )
                 )
             else:
                 headline = (
@@ -500,6 +508,38 @@ class DeterministicAnswerComposer:
         )
 
     @staticmethod
+    def _ranking_position_text(
+        rank: int,
+        ranking_method: str,
+        performance_direction: str,
+    ) -> str:
+        if ranking_method == "numeric":
+            return f"数值排名第{rank}名"
+
+        if ranking_method == "performance":
+            if (
+                performance_direction
+                == "higher_is_better"
+            ):
+                return (
+                    f"绩效排名第{rank}名"
+                    "（按数值从高到低）"
+                )
+
+            if (
+                performance_direction
+                == "lower_is_better"
+            ):
+                return (
+                    f"绩效排名第{rank}名"
+                    "（按数值从低到高）"
+                )
+
+            return f"绩效排名第{rank}名"
+
+        return f"第{rank}名"
+
+    @staticmethod
     def _ranking_rule_text(
         ranking_method: str,
         performance_direction: str,
@@ -512,13 +552,13 @@ class DeterministicAnswerComposer:
                 performance_direction
                 == "higher_is_better"
             ):
-                return "高值优先"
+                return "绩效排名（高值优先）"
 
             if (
                 performance_direction
                 == "lower_is_better"
             ):
-                return "低值优先"
+                return "绩效排名（低值优先）"
 
             return "绩效排名"
 

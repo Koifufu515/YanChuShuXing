@@ -110,15 +110,15 @@ class RankingAnswerComposerTest(
             answer.headline,
         )
         self.assertIn(
-            "各项贷款余额第7名",
+            "各项贷款余额绩效排名第7名（按数值从高到低）",
             answer.summary,
         )
         self.assertIn(
-            "不良贷款率第8名",
+            "不良贷款率绩效排名第8名（按数值从低到高）",
             answer.summary,
         )
         self.assertIn(
-            "净利润第6名",
+            "净利润绩效排名第6名（按数值从高到低）",
             answer.summary,
         )
         self.assertEqual(
@@ -166,10 +166,90 @@ class RankingAnswerComposerTest(
                 for row in answer.table.rows
             ],
             [
-                "高值优先",
-                "低值优先",
-                "高值优先",
+                "绩效排名（高值优先）",
+                "绩效排名（低值优先）",
+                "绩效排名（高值优先）",
             ],
+        )
+
+    def test_lower_is_better_target_rank_is_explicit(
+        self,
+    ) -> None:
+        facts = RankingOverviewFacts(
+            period="2025-12-31",
+            selection_mode="target",
+            rankings=[
+                MetricRankingFacts(
+                    metric=MetricRef(
+                        metric_id="ZB013",
+                        metric_name="不良贷款率",
+                        unit="%",
+                        performance_direction=(
+                            "lower_is_better"
+                        ),
+                    ),
+                    population_size=13,
+                    ranking_method="performance",
+                    items=[
+                        RankingItem(
+                            institution=InstitutionRef(
+                                institution_id="ORG002",
+                                institution_name=(
+                                    "江苏省B市农商行"
+                                ),
+                            ),
+                            value=0.91,
+                            rank=2,
+                        )
+                    ],
+                )
+            ],
+        )
+
+        answer = (
+            DeterministicAnswerComposer()
+            .compose(
+                question=(
+                    "江苏省B市农商行的不良贷款率"
+                    "全省排名是多少？"
+                ),
+                query_plan={},
+                facts=facts,
+            )
+        )
+
+        expected = (
+            "江苏省B市农商行不良贷款率"
+            "绩效排名第2名（按数值从低到高）"
+        )
+
+        self.assertEqual(
+            answer.headline,
+            expected,
+        )
+        self.assertIn(
+            "江苏省B市农商行在全省13家农商行中",
+            answer.summary,
+        )
+        self.assertIn(
+            "不良贷款率绩效排名第2名",
+            answer.summary,
+        )
+        self.assertIn(
+            "按数值从低到高",
+            answer.summary,
+        )
+
+        self.assertIsNotNone(answer.table)
+        assert answer.table is not None
+
+        self.assertEqual(
+            answer.table.rows[0][3],
+            "第2名",
+        )
+        self.assertEqual(
+            answer.table.rows[0][4],
+            "绩效排名（低值优先）",
         )
 
     def test_top_n_boundary_tie_uses_value_bar_chart(
