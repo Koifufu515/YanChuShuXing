@@ -140,10 +140,47 @@ class LLMRequest:
 
 
 @dataclass(frozen=True)
+class LLMUsage:
+    prompt_tokens: int = 0
+    prompt_cache_hit_tokens: int = 0
+    prompt_cache_miss_tokens: int = 0
+    completion_tokens: int = 0
+    reasoning_tokens: int = 0
+    total_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class LLMCallTelemetry:
+    latency_ms: float = 0.0
+    request_body_bytes: int = 0
+    response_body_bytes: int = 0
+    usage: LLMUsage = field(default_factory=LLMUsage)
+
+
+@dataclass(frozen=True)
 class LLMResponse:
     text: str
     model: str
     latency_ms: float
+    telemetry: LLMCallTelemetry = field(default_factory=LLMCallTelemetry)
+
+
+@dataclass(frozen=True)
+class QueryPlanPhaseTelemetry:
+    prompt_build_ms: float = 0.0
+    llm: LLMCallTelemetry = field(default_factory=LLMCallTelemetry)
+    parse_ms: float = 0.0
+    validation_ms: float = 0.0
+    schema_validation_ms: float = 0.0
+    business_validation_ms: float = 0.0
+
+
+@dataclass(frozen=True)
+class QueryPlanPerformance:
+    initial: QueryPlanPhaseTelemetry = field(default_factory=QueryPlanPhaseTelemetry)
+    repair: QueryPlanPhaseTelemetry | None = None
+    total_planning_ms: float = 0.0
+    unattributed_ms: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -172,6 +209,7 @@ class QueryPlanResult:
     business_valid: bool
     business_errors: list[dict[str, str]]
     query_plan: dict[str, Any]
+    performance: QueryPlanPerformance = field(default_factory=QueryPlanPerformance)
 
 
 @dataclass(frozen=True)

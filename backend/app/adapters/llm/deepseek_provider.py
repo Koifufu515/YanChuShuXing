@@ -14,7 +14,12 @@ from app.application.errors import (
     ProviderTimeoutError,
     ProviderUnavailableError,
 )
-from app.application.models import LLMRequest, LLMResponse
+from app.application.models import (
+    LLMCallTelemetry,
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+)
 
 
 class DeepSeekLLMProvider:
@@ -37,9 +42,10 @@ class DeepSeekLLMProvider:
         }
         if request.response_format:
             payload["response_format"] = {"type": request.response_format}
+        request_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         http_request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            data=request_body,
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
@@ -61,11 +67,18 @@ class DeepSeekLLMProvider:
                 raise ProviderUnavailableError("DeepSeek 服务暂时不可用。") from exc
             raise ProviderTimeoutError("DeepSeek 请求超时，请稍后重试。") from exc
 
-        content, response_model = self._parse_response(raw)
+        latency_ms = round((time.perf_counter() - started) * 1000, 2)
+        content, response_model, usage = self._parse_response(raw)
         return LLMResponse(
             text=content,
             model=response_model or self.model,
-            latency_ms=round((time.perf_counter() - started) * 1000, 2),
+            latency_ms=latency_ms,
+            telemetry=LLMCallTelemetry(
+                latency_ms=latency_ms,
+                request_body_bytes=len(request_body),
+                response_body_bytes=len(raw),
+                usage=usage,
+            ),
         )
 
     def _validate_configuration(self) -> None:
@@ -75,7 +88,7 @@ class DeepSeekLLMProvider:
             raise ConfigurationError("DeepSeek Base URL 必须使用 HTTPS。")
 
     @staticmethod
-    def _parse_response(raw: bytes) -> tuple[str, str | None]:
+    def _parse_response(raw: bytes) -> tuple[str, str | None, LLMUsage]:
         try:
             payload = json.loads(raw.decode("utf-8"))
             content = payload["choices"][0]["message"]["content"]
@@ -84,4 +97,34 @@ class DeepSeekLLMProvider:
             raise InvalidProviderOutputError("DeepSeek 返回格式不符合预期。") from exc
         if not isinstance(content, str) or not content.strip():
             raise InvalidProviderOutputError("DeepSeek 返回了空内容。")
-        return content.strip(), model if isinstance(model, str) else None
+        return (
+            content.strip(),
+            model if isinstance(model, str) else None,
+            DeepSeekLLMProvider._parse_usage(payload.get("usage")),
+        )
+
+    @staticmethod
+    def _parse_usage(raw_usage: object) -> LLMUsage:
+        if not isinstance(raw_usage, dict):
+            return LLMUsage()
+        completion_details = raw_usage.get("completion_tokens_details")
+        if not isinstance(completion_details, dict):
+            completion_details = {}
+
+        def safe_int(value: object) -> int:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+            return 0
+
+        return LLMUsage(
+            prompt_tokens=safe_int(raw_usage.get("prompt_tokens")),
+            prompt_cache_hit_tokens=safe_int(
+                raw_usage.get("prompt_cache_hit_tokens")
+            ),
+            prompt_cache_miss_tokens=safe_int(
+                raw_usage.get("prompt_cache_miss_tokens")
+            ),
+            completion_tokens=safe_int(raw_usage.get("completion_tokens")),
+            reasoning_tokens=safe_int(completion_details.get("reasoning_tokens")),
+            total_tokens=safe_int(raw_usage.get("total_tokens")),
+        )

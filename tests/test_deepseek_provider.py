@@ -93,3 +93,75 @@ class DeepSeekProviderTest(unittest.TestCase):
     def test_missing_key_is_structured_configuration_error(self):
         with self.assertRaises(ConfigurationError):
             self._provider(api_key="").complete(LLMRequest("system", "user"))
+
+    @patch("urllib.request.urlopen")
+    def test_complete_usage_and_body_sizes_are_recorded(self, urlopen):
+        payload = {
+            "choices": [{"message": {"content": '{"ok": true}'}}],
+            "model": "deepseek-v4-flash",
+            "usage": {
+                "prompt_tokens": 100,
+                "prompt_cache_hit_tokens": 80,
+                "prompt_cache_miss_tokens": 20,
+                "completion_tokens": 12,
+                "completion_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 112,
+            },
+        }
+        urlopen.return_value = _Response(payload)
+
+        result = self._provider().complete(LLMRequest("系统提示", "问题"))
+
+        usage = result.telemetry.usage
+        self.assertEqual(usage.prompt_tokens, 100)
+        self.assertEqual(usage.prompt_cache_hit_tokens, 80)
+        self.assertEqual(usage.prompt_cache_miss_tokens, 20)
+        self.assertEqual(usage.completion_tokens, 12)
+        self.assertEqual(usage.reasoning_tokens, 0)
+        self.assertEqual(usage.total_tokens, 112)
+        self.assertEqual(
+            result.telemetry.request_body_bytes,
+            len(urlopen.call_args.args[0].data),
+        )
+        self.assertEqual(
+            result.telemetry.response_body_bytes,
+            len(_Response(payload).body),
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_missing_or_invalid_usage_safely_falls_back(self, urlopen):
+        invalid_usages = [
+            None,
+            "invalid",
+            [],
+            {"prompt_tokens": "100"},
+            {"prompt_tokens": True},
+        ]
+        for raw_usage in invalid_usages:
+            with self.subTest(raw_usage=raw_usage):
+                payload = {
+                    "choices": [{"message": {"content": '{"ok": true}'}}],
+                    "usage": raw_usage,
+                }
+                urlopen.return_value = _Response(payload)
+                result = self._provider().complete(LLMRequest("system", "user"))
+                self.assertEqual(result.telemetry.usage.prompt_tokens, 0)
+                self.assertEqual(result.telemetry.usage.reasoning_tokens, 0)
+
+    @patch("urllib.request.urlopen")
+    def test_cache_and_reasoning_fields_may_be_missing(self, urlopen):
+        urlopen.return_value = _Response(
+            {
+                "choices": [{"message": {"content": '{"ok": true}'}}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 2},
+            }
+        )
+
+        usage = self._provider().complete(
+            LLMRequest("system", "user")
+        ).telemetry.usage
+
+        self.assertEqual(usage.prompt_tokens, 9)
+        self.assertEqual(usage.prompt_cache_hit_tokens, 0)
+        self.assertEqual(usage.prompt_cache_miss_tokens, 0)
+        self.assertEqual(usage.reasoning_tokens, 0)
