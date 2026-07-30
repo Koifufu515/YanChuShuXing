@@ -1,0 +1,16 @@
+{
+  "institutions": [
+    {"institution_id": "ORG001", "institution_name": "江苏省A市农商行"},
+    {"institution_id": "ORG002", "institution_name": "江苏省B市农商行"},
+    {"institution_id": "ORG003", "institution_name": "江苏省C市农商行"}
+  ],
+  "metrics": [
+    {"metric_id": "ZB001", "name": "各项存款余额", "unit": "亿元"},
+    {"metric_id": "ZB002", "name": "各项贷款余额", "unit": "亿元"},
+    {"metric_id": "ZB003", "name": "净利润", "unit": "万元"},
+    {"metric_id": "ZB013", "name": "不良贷款率", "unit": "%"},
+    {"metric_id": "ZB015", "name": "拨备覆盖率", "unit": "%"},
+    {"metric_id": "ZB030", "name": "成本收入比", "unit": "%"},
+    {"metric_id": "ZB035", "name": "网点平均存款余额", "unit": "万元/网点"}
+  ]
+}
