@@ -20,6 +20,7 @@ from app.application.models import (
     QueryResult,
 )
 from app.application.planned_pipeline import PlannedQueryPipeline
+from app.application.query_plan_normalization import normalize_query_plan
 from app.application.query_plan_validation import validate_business_rules
 
 
@@ -3628,6 +3629,102 @@ class QueryPlannerRuntimeContextTest(unittest.TestCase):
         self.assertNotIn("language_rules", llm_context)
         self.assertIn("language_rules", context)
         self.assertEqual(llm_context["metrics"], context["metrics"])
+
+
+class QueryPlanMetricCompletenessNormalizationTest(unittest.TestCase):
+    def test_adds_missing_check_for_multiple_source_metrics(self):
+        plan = {
+            "status": {"code": "executable"},
+            "metrics": {
+                "requested_metric_ids": ["ZB013", "ZB015"],
+                "source_metric_ids": ["ZB013", "ZB015"],
+                "concept_ids": [],
+            },
+            "checks": [
+                {
+                    "type": "record_exists",
+                    "parameters": {
+                        "metric_ids": ["ZB013", "ZB015"],
+                    },
+                }
+            ],
+        }
+
+        normalized = normalize_query_plan(plan)
+
+        self.assertEqual(
+            normalized["checks"][-1],
+            {
+                "type": "metric_completeness",
+                "parameters": {
+                    "metric_ids": ["ZB013", "ZB015"],
+                },
+            },
+        )
+        self.assertFalse(
+            any(
+                check.get("type") == "metric_completeness"
+                for check in plan["checks"]
+            )
+        )
+        self.assertEqual(
+            normalize_query_plan(normalized),
+            normalized,
+        )
+
+    def test_preserves_existing_metric_completeness_check(self):
+        existing_check = {
+            "type": "metric_completeness",
+            "parameters": {
+                "metric_ids": ["ZB015", "ZB013"],
+            },
+        }
+        plan = {
+            "status": {"code": "executable"},
+            "metrics": {
+                "requested_metric_ids": ["ZB013", "ZB015"],
+                "source_metric_ids": ["ZB013", "ZB015"],
+                "concept_ids": [],
+            },
+            "checks": [existing_check],
+        }
+
+        normalized = normalize_query_plan(plan)
+
+        self.assertEqual(
+            normalized["checks"],
+            [existing_check],
+        )
+
+    def test_skips_single_metric_and_non_executable_plans(self):
+        cases = [
+            (
+                "single_metric",
+                "executable",
+                ["ZB013"],
+            ),
+            (
+                "non_executable",
+                "clarification_required",
+                ["ZB013", "ZB015"],
+            ),
+        ]
+
+        for name, status_code, source_metric_ids in cases:
+            with self.subTest(name=name):
+                plan = {
+                    "status": {"code": status_code},
+                    "metrics": {
+                        "requested_metric_ids": source_metric_ids,
+                        "source_metric_ids": source_metric_ids,
+                        "concept_ids": [],
+                    },
+                    "checks": [],
+                }
+
+                normalized = normalize_query_plan(plan)
+
+                self.assertEqual(normalized["checks"], [])
 
 
 if __name__ == "__main__":

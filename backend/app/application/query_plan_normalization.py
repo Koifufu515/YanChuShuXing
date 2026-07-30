@@ -20,6 +20,7 @@ _MAIN_METRICS = (*_MAIN_METRIC_DIRECTIONS, "ZB022")
 def normalize_query_plan(plan: dict[str, Any]) -> dict[str, Any]:
     """Apply deterministic, idempotent repairs for frozen business concepts."""
     normalized = deepcopy(plan)
+    _complete_metric_completeness_check(normalized)
     if not _requires_main_metric_ranking_completion(normalized):
         return normalized
 
@@ -141,6 +142,53 @@ def normalize_query_plan(plan: dict[str, Any]) -> dict[str, Any]:
     for step, operation in enumerate(operations, start=1):
         operation["step"] = step
     return normalized
+
+
+def _complete_metric_completeness_check(
+    plan: dict[str, Any],
+) -> None:
+    status = plan.get("status")
+    if not isinstance(status, dict) or status.get("code") != "executable":
+        return
+
+    metrics = plan.get("metrics")
+    source_metric_ids = (
+        metrics.get("source_metric_ids")
+        if isinstance(metrics, dict)
+        else None
+    )
+    if (
+        not isinstance(source_metric_ids, list)
+        or len(source_metric_ids) < 2
+        or len(set(source_metric_ids)) != len(source_metric_ids)
+        or not all(
+            isinstance(metric_id, str)
+            and len(metric_id) == 5
+            and metric_id.startswith("ZB")
+            and metric_id[2:].isdigit()
+            for metric_id in source_metric_ids
+        )
+    ):
+        return
+
+    checks = plan.get("checks")
+    if not isinstance(checks, list):
+        return
+    if any(
+        isinstance(check, dict)
+        and check.get("type") == "metric_completeness"
+        for check in checks
+    ):
+        return
+
+    checks.append(
+        {
+            "type": "metric_completeness",
+            "parameters": {
+                "metric_ids": list(source_metric_ids),
+            },
+        }
+    )
 
 
 def _requires_main_metric_ranking_completion(plan: dict[str, Any]) -> bool:
