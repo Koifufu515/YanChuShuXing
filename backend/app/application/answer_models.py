@@ -124,6 +124,7 @@ class CalculationInputFact:
     period: str | None
     value: JsonScalar
     unit: str
+    institution: InstitutionRef | None = None
 
 
 @dataclass(frozen=True)

@@ -780,6 +780,16 @@ class DeterministicAnswerComposer:
                 and left.metric_name
                 == right.metric_name
             )
+            distinct_institutions = (
+                left.institution is not None
+                and right.institution is not None
+                and (
+                    left.institution.institution_id
+                    != right.institution.institution_id
+                    or left.institution.institution_name
+                    != right.institution.institution_name
+                )
+            )
 
             if (
                 calculation_type
@@ -800,6 +810,62 @@ class DeterministicAnswerComposer:
                     f"二者绝对差额为"
                     f"{absolute_display}"
                     f"{facts.result_unit}。"
+                )
+
+            elif (
+                same_metric
+                and distinct_institutions
+            ):
+                assert left.institution is not None
+                assert right.institution is not None
+
+                left_name = (
+                    left.institution.institution_name
+                )
+                right_name = (
+                    right.institution.institution_name
+                )
+
+                if result_decimal > 0:
+                    higher_name = left_name
+                    lower_name = right_name
+                elif result_decimal < 0:
+                    higher_name = right_name
+                    lower_name = left_name
+                else:
+                    higher_name = None
+                    lower_name = None
+
+                if higher_name is None:
+                    headline = (
+                        f"{left_name}与{right_name}"
+                        f"{left.metric_name}相同"
+                    )
+                    conclusion = (
+                        f"两家机构的{left.metric_name}"
+                        "相同。"
+                    )
+                else:
+                    headline = (
+                        f"{higher_name}{left.metric_name}"
+                        f"高于{lower_name}"
+                        f"{absolute_display}"
+                        f"{display_result_unit}"
+                    )
+                    conclusion = (
+                        f"{lower_name}的{left.metric_name}"
+                        f"更低，{higher_name}更高，"
+                        f"相差{absolute_display}"
+                        f"{display_result_unit}。"
+                    )
+
+                summary = (
+                    f"截至{period_text(left.period)}，"
+                    f"{left_name}的{left.metric_name}为"
+                    f"{input_value_text('left')}，"
+                    f"{right_name}的{right.metric_name}为"
+                    f"{input_value_text('right')}。"
+                    f"{conclusion}"
                 )
 
             elif same_metric:
@@ -878,11 +944,26 @@ class DeterministicAnswerComposer:
             "right": "右侧值",
         }
 
+        use_institution_labels = (
+            facts.subject.institution_id is None
+            and all(
+                item.institution is not None
+                for item in facts.inputs
+            )
+        )
+
         table_rows = [
             [
-                role_labels.get(
-                    item.role,
-                    item.role,
+                (
+                    item.institution.institution_name
+                    if (
+                        use_institution_labels
+                        and item.institution is not None
+                    )
+                    else role_labels.get(
+                        item.role,
+                        item.role,
+                    )
                 ),
                 item.metric_name,
                 (

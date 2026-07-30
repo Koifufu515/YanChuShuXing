@@ -1955,10 +1955,35 @@ class DeterministicQueryPlanExecutor:
             str(record["institution_name"])
             for record in records
         }
+        metric_ids = {
+            str(record["metric_id"])
+            for record in records
+        }
+        periods = {
+            str(record["date"])
+            for record in records
+        }
+        units = {
+            str(record["unit"])
+            for record in records
+        }
+
+        same_institution = (
+            len(institution_ids) == 1
+            and len(institution_names) == 1
+        )
+        cross_institution_comparison = (
+            final_operator in {"OP003", "OP004"}
+            and len(institution_ids) == 2
+            and len(institution_names) == 2
+            and len(metric_ids) == 1
+            and len(periods) == 1
+            and len(units) == 1
+        )
 
         if (
-            len(institution_ids) != 1
-            or len(institution_names) != 1
+            not same_institution
+            and not cross_institution_comparison
         ):
             return None
 
@@ -1979,6 +2004,14 @@ class DeterministicQueryPlanExecutor:
                     )
                 ),
                 unit=str(record["unit"]),
+                institution=InstitutionRef(
+                    institution_id=str(
+                        record["institution_id"]
+                    ),
+                    institution_name=str(
+                        record["institution_name"]
+                    ),
+                ),
             )
             for role, record in zip(
                 roles[final_operator],
@@ -2026,23 +2059,29 @@ class DeterministicQueryPlanExecutor:
             or not result_metric_name
         ):
             if final_operator == "OP003":
-                result_metric_name = (
-                    f"{left_name}变化额"
-                    if left_name == right_name
-                    else (
+                if left_name == right_name:
+                    result_metric_name = (
+                        f"{left_name}差额"
+                        if cross_institution_comparison
+                        else f"{left_name}变化额"
+                    )
+                else:
+                    result_metric_name = (
                         f"{left_name}与"
                         f"{right_name}差额"
                     )
-                )
             elif final_operator == "OP004":
-                result_metric_name = (
-                    f"{left_name}绝对变化额"
-                    if left_name == right_name
-                    else (
+                if left_name == right_name:
+                    result_metric_name = (
+                        f"{left_name}绝对差额"
+                        if cross_institution_comparison
+                        else f"{left_name}绝对变化额"
+                    )
+                else:
+                    result_metric_name = (
                         f"{left_name}与"
                         f"{right_name}绝对差额"
                     )
-                )
             elif final_operator == "OP006":
                 result_metric_name = (
                     f"{left_name}占"
@@ -2063,15 +2102,32 @@ class DeterministicQueryPlanExecutor:
         ):
             return None
 
-        return CalculatedMetricFacts(
-            subject=InstitutionRef(
+        subject = (
+            InstitutionRef(
                 institution_id=next(
                     iter(institution_ids)
                 ),
                 institution_name=next(
                     iter(institution_names)
                 ),
-            ),
+            )
+            if same_institution
+            else InstitutionRef(
+                institution_id=None,
+                institution_name="两家机构",
+            )
+        )
+
+        result_unit = final_value.unit
+        if (
+            cross_institution_comparison
+            and len(units) == 1
+            and next(iter(units)) == "%"
+        ):
+            result_unit = "百分点"
+
+        return CalculatedMetricFacts(
+            subject=subject,
             calculation_type=(
                 calculation_types[
                     final_operator
@@ -2087,7 +2143,7 @@ class DeterministicQueryPlanExecutor:
                     final_value.data["value"]
                 )
             ),
-            result_unit=final_value.unit,
+            result_unit=result_unit,
             inputs=input_facts,
         )
 
