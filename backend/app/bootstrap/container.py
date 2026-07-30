@@ -149,6 +149,15 @@ def build_pipeline(
     )
 
 
+def _project_llm_query_planner_context(
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """Remove context already encoded in the LLM system prompt."""
+    llm_context = dict(context)
+    llm_context.pop("language_rules", None)
+    return llm_context
+
+
 def _build_query_planner(
     provider: LLMProvider,
     settings: Settings,
@@ -165,11 +174,12 @@ def _build_query_planner(
         raise ConfigurationError("查询规划器配置文件无法读取。") from exc
     if not isinstance(schema, dict) or not isinstance(context, dict):
         raise ConfigurationError("查询规划器配置文件顶层必须是JSON对象。")
+    llm_context = _project_llm_query_planner_context(context)
     fallback_planner = LLMQueryPlanner(
         provider=provider,
         prompt=prompt,
         schema=schema,
-        context=context,
+        context=llm_context,
         timeout_seconds=settings.llm_timeout_seconds,
         temperature=settings.llm_temperature,
     )

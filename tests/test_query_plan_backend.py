@@ -9,6 +9,7 @@ from app.adapters.execution.deterministic_query_plan_executor import (
     DeterministicQueryPlanExecutor,
 )
 from app.adapters.planning.llm_query_planner import LLMQueryPlanner
+from app.bootstrap.container import _project_llm_query_planner_context
 from app.application.models import (
     AuditEvent,
     LLMResponse,
@@ -3602,6 +3603,31 @@ class FinalBaselineRegressionTest(unittest.TestCase):
             ),
             errors,
         )
+
+
+class QueryPlannerRuntimeContextTest(unittest.TestCase):
+    def test_removes_language_rules_without_mutating_full_context(self):
+        context = {
+            "metrics": [
+                {
+                    "metric_id": "ZB001",
+                    "name": "各项存款余额",
+                }
+            ],
+            "language_rules": [
+                {
+                    "rule_id": "LR001",
+                    "expression": "A比B多多少",
+                }
+            ],
+        }
+
+        llm_context = _project_llm_query_planner_context(context)
+
+        self.assertIsNot(llm_context, context)
+        self.assertNotIn("language_rules", llm_context)
+        self.assertIn("language_rules", context)
+        self.assertEqual(llm_context["metrics"], context["metrics"])
 
 
 if __name__ == "__main__":
