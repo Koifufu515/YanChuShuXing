@@ -12,7 +12,14 @@ from app.adapters.database.sqlite_executor import SQLiteExecutor
 from app.adapters.formatting.template_formatter import TemplateResultFormatter
 from app.adapters.generation.rule_generator import RuleSQLGenerator
 from app.adapters.safety.sqlglot_checker import SQLGlotSafetyChecker
-from app.application.models import GeneratedSQL, QueryContext
+from app.application.answer_models import (
+    AnswerPayload,
+    AnswerTable,
+    ChartSeries,
+    ChartSpec,
+    KeyMetric,
+)
+from app.application.models import GeneratedSQL, QueryContext, QueryOutcome
 from app.application.errors import QueryExecutionError
 from app.application.pipeline import QueryPipeline
 from app.core.settings import Settings
@@ -35,6 +42,31 @@ class BrokenExecutor:
 class BuggyPipeline:
     def run(self, command):
         raise RuntimeError("programming bug")
+
+
+class StructuredAnswerPipeline:
+    def run(self, command):
+        return QueryOutcome(
+            request_id=command.request_id,
+            question=command.question,
+            columns=["value"],
+            rows=[[31.42]],
+            summary="旧摘要保持兼容。",
+            answer=AnswerPayload(
+                answer_type="benchmark_comparison",
+                headline="成本收入比低于全省均值5.54个百分点",
+                summary="结构化业务解释。",
+                key_metrics=[KeyMetric("目标机构", 31.42, "%")],
+                table=AnswerTable(["对象", "值"], [["目标机构", 31.42]]),
+                chart_spec=ChartSpec(
+                    "bar",
+                    "成本收入比对比",
+                    ["目标机构", "全省均值"],
+                    [ChartSeries("成本收入比", [31.42, 36.96])],
+                    "%",
+                ),
+            ),
+        )
 
 
 class QueryAPITest(unittest.TestCase):
@@ -102,13 +134,10 @@ class QueryAPITest(unittest.TestCase):
                         "warnings",
                         "error",
                         "metadata",
-                        "confirmation",
-                        "status",
-                        "clarification_id",
-                        "original_question",
-                        "questions",
+                        "answer",
                     },
                 )
+                self.assertIsNone(body["answer"])
 
     def test_ready_returns_public_real_metadata(self) -> None:
         payload = {
@@ -206,6 +235,30 @@ class QueryAPITest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["rows"], [[2]])
+        self.assertIsNone(response.json()["answer"])
+
+    def test_structured_answer_is_serialized_by_query_and_ask(self) -> None:
+        app.dependency_overrides[self.get_query_pipeline] = (
+            lambda: StructuredAnswerPipeline()
+        )
+        for path in ("/api/v1/query", "/api/v1/ask"):
+            with self.subTest(path=path):
+                response = self.client.post(
+                    path,
+                    json={"question": "比较成本收入比", "user_id": "demo_user"},
+                )
+                body = response.json()
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(body["summary"], "旧摘要保持兼容。")
+                self.assertEqual(body["columns"], ["value"])
+                self.assertEqual(body["rows"], [[31.42]])
+                self.assertEqual(
+                    body["answer"]["answer_type"], "benchmark_comparison"
+                )
+                self.assertEqual(
+                    body["answer"]["chart_spec"]["series"][0]["values"],
+                    [31.42, 36.96],
+                )
 
     def test_validation_error_uses_common_response_shape(self) -> None:
         for invalid_question in ("", "   "):
@@ -232,9 +285,10 @@ class QueryAPITest(unittest.TestCase):
                         "warnings",
                         "error",
                         "metadata",
-                        "confirmation",
+                        "answer",
                     },
                 )
+                self.assertIsNone(body["answer"])
 
     def test_unexpected_programming_error_is_handled_by_api(self) -> None:
         app.dependency_overrides[self.get_query_pipeline] = lambda: BuggyPipeline()

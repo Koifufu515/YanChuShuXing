@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -12,11 +11,9 @@ from app.application.models import (
     QueryPlanResult,
     QueryPlanValidation,
 )
+from app.application.query_plan_normalization import normalize_query_plan
 from app.application.query_plan_validation import validate_business_rules
 from app.ports.llm_provider import LLMProvider
-
-
-logger = logging.getLogger(__name__)
 
 
 class LLMQueryPlanner:
@@ -38,10 +35,6 @@ class LLMQueryPlanner:
         self.validator = Draft202012Validator(schema)
 
     def plan(self, question: str) -> QueryPlanResult:
-        logger.info(
-            "llm_query_planner_started provider_class=%s",
-            self.provider.__class__.__name__,
-        )
         response = self.provider.complete(
             LLMRequest(
                 system_prompt=self.prompt,
@@ -50,11 +43,6 @@ class LLMQueryPlanner:
                 timeout_seconds=self.timeout_seconds,
                 response_format="json_object",
             )
-        )
-        logger.info(
-            "llm_query_planner_provider_completed model=%s latency_ms=%s",
-            response.model,
-            response.latency_ms,
         )
 
         plan = self._parse_model_json(response.text)
@@ -106,6 +94,7 @@ class LLMQueryPlanner:
         plan: dict[str, Any],
         question: str,
     ) -> QueryPlanValidation:
+        plan = normalize_query_plan(plan)
         schema_errors = sorted(
             self.validator.iter_errors(plan),
             key=lambda item: list(item.path),

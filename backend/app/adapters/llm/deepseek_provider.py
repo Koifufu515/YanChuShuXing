@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import ssl
 import time
 import urllib.request
@@ -18,9 +17,6 @@ from app.application.errors import (
 from app.application.models import LLMRequest, LLMResponse
 
 
-logger = logging.getLogger(__name__)
-
-
 class DeepSeekLLMProvider:
     def __init__(self, base_url: str, api_key: str, model: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -29,7 +25,6 @@ class DeepSeekLLMProvider:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         self._validate_configuration()
-        logger.info("deepseek_call_started model=%s", self.model)
         payload = {
             "model": self.model,
             "messages": [
@@ -67,17 +62,11 @@ class DeepSeekLLMProvider:
             raise ProviderTimeoutError("DeepSeek 请求超时，请稍后重试。") from exc
 
         content, response_model = self._parse_response(raw)
-        result = LLMResponse(
+        return LLMResponse(
             text=content,
             model=response_model or self.model,
             latency_ms=round((time.perf_counter() - started) * 1000, 2),
         )
-        logger.info(
-            "deepseek_call_completed model=%s latency_ms=%s",
-            result.model,
-            result.latency_ms,
-        )
-        return result
 
     def _validate_configuration(self) -> None:
         if not self._api_key or not self.model or not self.base_url:

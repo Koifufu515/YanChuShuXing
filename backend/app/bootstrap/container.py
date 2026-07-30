@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from app.adapters.audit.noop_logger import NoOpAuditLogger
+from app.adapters.answering.deterministic_answer_composer import (
+    DeterministicAnswerComposer,
+)
 from app.adapters.context.yaml_resolver import YAMLContextResolver
 from app.adapters.database.sqlite_executor import SQLiteExecutor
 from app.adapters.execution.deterministic_query_plan_executor import (
@@ -16,8 +19,11 @@ from app.adapters.generation.hybrid_generator import HybridSQLGenerator
 from app.adapters.generation.llm_generator import LLMSQLGenerator
 from app.adapters.generation.real_rule_generator import RealRuleSQLGenerator
 from app.adapters.generation.rule_generator import RuleSQLGenerator
-from app.adapters.intent_confirmation import RealIntentConfirmationResolver
 from app.adapters.llm.deepseek_provider import DeepSeekLLMProvider
+from app.adapters.planning.business_concept_fast_planner import (
+    BusinessConceptFastPlanner,
+    RoutingQueryPlanner,
+)
 from app.adapters.planning.llm_query_planner import LLMQueryPlanner
 from app.adapters.safety.sqlglot_checker import SQLGlotSafetyChecker
 from app.application.errors import ConfigurationError
@@ -72,6 +78,7 @@ def build_pipeline(
             query_planner=planner,
             query_plan_executor=executor,
             audit_logger=NoOpAuditLogger(),
+            answer_composer=DeterministicAnswerComposer(),
             provider_name=resolved_settings.llm_provider,
         )
 
@@ -89,11 +96,6 @@ def build_pipeline(
         database_executor=database_executor,
         result_formatter=TemplateResultFormatter(),
         audit_logger=NoOpAuditLogger(),
-        intent_confirmation_resolver=(
-            RealIntentConfirmationResolver(resolved_database)
-            if is_real and resolved_settings.generator_mode == "rule"
-            else None
-        ),
     )
 
 
@@ -113,13 +115,20 @@ def _build_query_planner(
         raise ConfigurationError("查询规划器配置文件无法读取。") from exc
     if not isinstance(schema, dict) or not isinstance(context, dict):
         raise ConfigurationError("查询规划器配置文件顶层必须是JSON对象。")
-    return LLMQueryPlanner(
+    fallback_planner = LLMQueryPlanner(
         provider=provider,
         prompt=prompt,
         schema=schema,
         context=context,
         timeout_seconds=settings.llm_timeout_seconds,
         temperature=settings.llm_temperature,
+    )
+    return RoutingQueryPlanner(
+        fast_planner=BusinessConceptFastPlanner(
+            schema=schema,
+            context=context,
+        ),
+        fallback_planner=fallback_planner,
     )
 
 

@@ -11,8 +11,6 @@
   },
   "error_states": {
     "CLARIFICATION_REQUIRED": ["条件不足", "请补充缺少的机构、指标、时间或比较条件。"],
-    "DATA_UNAVAILABLE": ["数据暂不可用", "请根据后端返回的说明补充缺少的时间、机构或指标。"],
-    "PENDING_PROJECT_DEFINITION": ["口径待确认", "该问题需要先完成正式业务口径定义。"],
     "INVALID_CONFIRMATION": ["确认无效", "确认信息已失效或不在正式候选目录中，请重新确认。"],
     "AMBIGUOUS_QUESTION": ["语义歧义", "问题存在多种理解，请确认分析条件。"],
     "UNSUPPORTED_METRIC": ["暂不支持", "该指标尚未进入系统指标库。"],

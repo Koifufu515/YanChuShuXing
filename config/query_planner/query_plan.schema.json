@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://yanchushuxing.local/schemas/query-plan-v1.4.json",
   "title": "言出数行标准查询计划 v1.4",
-  "description": "银行智能问数查询计划结构约束。v1.4增加由查询规划器生成的结构化澄清问题。",
+  "description": "银行智能问数查询计划结构约束。统一多记录排序、跨期对齐、动态全省均值比较和普通除法契约。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -44,105 +44,6 @@
             "string",
             "null"
           ]
-        },
-        "questions": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "field",
-              "label",
-              "reason",
-              "type",
-              "options",
-              "required"
-            ],
-            "properties": {
-              "field": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]{0,63}$"
-              },
-              "label": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 120
-              },
-              "reason": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 300
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "single_select",
-                  "multi_select",
-                  "date",
-                  "text"
-                ]
-              },
-              "options": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "value",
-                    "label"
-                  ],
-                  "properties": {
-                    "value": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128
-                    },
-                    "label": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 120
-                    }
-                  }
-                },
-                "uniqueItems": true
-              },
-              "required": {
-                "type": "boolean"
-              }
-            },
-            "allOf": [
-              {
-                "if": {
-                  "properties": {
-                    "type": {
-                      "enum": [
-                        "single_select",
-                        "multi_select"
-                      ]
-                    }
-                  },
-                  "required": [
-                    "type"
-                  ]
-                },
-                "then": {
-                  "properties": {
-                    "options": {
-                      "minItems": 1
-                    }
-                  }
-                },
-                "else": {
-                  "properties": {
-                    "options": {
-                      "maxItems": 0
-                    }
-                  }
-                }
-              }
-            ]
-          },
-          "maxItems": 8
         }
       }
     },
@@ -395,38 +296,6 @@
             "if": {
               "properties": {
                 "operator_id": {
-                  "enum": [
-                    "OP009",
-                    "OP010",
-                    "OP011",
-                    "OP012",
-                    "OP013",
-                    "OP014",
-                    "OP015",
-                    "OP016",
-                    "OP017",
-                    "OP018",
-                    "OP020"
-                  ]
-                }
-              },
-              "required": [
-                "operator_id"
-              ]
-            },
-            "then": {
-              "properties": {
-                "input_refs": {
-                  "minItems": 1,
-                  "maxItems": 1
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "operator_id": {
                   "const": "OP001"
                 }
               },
@@ -597,6 +466,14 @@
                     },
                     "denominator": {
                       "type": "string"
+                    },
+                    "multiplier": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "result_unit": {
+                      "type": "string",
+                      "minLength": 1
                     }
                   }
                 }
@@ -649,6 +526,9 @@
                       ]
                     }
                   }
+                },
+                "input_refs": {
+                  "minItems": 1
                 }
               }
             }
@@ -684,6 +564,9 @@
                       ]
                     }
                   }
+                },
+                "input_refs": {
+                  "minItems": 1
                 }
               }
             }
@@ -902,6 +785,63 @@
                       "format": "date"
                     }
                   }
+                },
+                "input_refs": {
+                  "maxItems": 0
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP014"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 1,
+                  "maxItems": 1
+                },
+                "parameters": {
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "max",
+                        "min"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "operator_id": {
+                  "const": "OP018"
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "input_refs": {
+                  "minItems": 1,
+                  "maxItems": 1
                 }
               }
             }
@@ -1074,9 +1014,6 @@
             "properties": {
               "clarification_question": {
                 "type": "null"
-              },
-              "questions": {
-                "maxItems": 0
               }
             }
           }
@@ -1102,14 +1039,8 @@
               "clarification_question": {
                 "type": "string",
                 "minLength": 1
-              },
-              "questions": {
-                "minItems": 1
               }
-            },
-            "required": [
-              "questions"
-            ]
+            }
           }
         }
       }

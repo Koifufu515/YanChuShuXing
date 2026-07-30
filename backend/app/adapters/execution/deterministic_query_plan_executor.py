@@ -2,21 +2,32 @@ from __future__ import annotations
 
 import calendar
 import json
-import logging
 import operator
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from time import perf_counter
 from typing import Any, Callable, Iterable
 
 from app.application.errors import QueryExecutionError
+from app.application.answer_models import (
+    BenchmarkComparisonFacts,
+    InstitutionRef,
+    MainMetricFact,
+    MainMetricsOverviewFacts,
+    MetricRef,
+    TrendOverviewFacts,
+    TrendPoint,
+    TrendSeries,
+    MetricRankingFacts,
+    RankingItem,
+    RankingOverviewFacts,
+    DirectMetricValueFact,
+    DirectMetricValuesFacts,
+)
 from app.application.models import JsonScalar, QueryPlanExecutionResult
 from app.ports.database_executor import DatabaseExecutor
-
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -25,6 +36,7 @@ class ExecutionValue:
     data: Any
     unit: str | None = None
     operator_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class DeterministicQueryPlanExecutor:
@@ -73,6 +85,7 @@ class DeterministicQueryPlanExecutor:
                 context=context,
             )
             result.operator_id = operator_id
+            result.metadata.setdefault("output_ref", output_ref)
             context[output_ref] = result
             trace.append(
                 {
@@ -89,17 +102,1599 @@ class DeterministicQueryPlanExecutor:
         self._run_checks(query_plan, context)
         final_ref = operations[-1]["output_ref"]
         final_value = context[final_ref]
+        output_plan = dict(
+            query_plan.get("output")
+            if isinstance(query_plan.get("output"), dict)
+            else {}
+        )
+        institutions = query_plan.get("institutions")
+        targets = (
+            institutions.get("targets")
+            if isinstance(institutions, dict)
+            else []
+        )
+        targets = targets if isinstance(targets, list) else []
+        output_plan["_target_institution_ids"] = [
+            item.get("institution_id")
+            for item in targets
+            if isinstance(item, dict)
+            and isinstance(item.get("institution_id"), str)
+        ]
         columns, rows, summary = self._render(
             final_value,
-            query_plan.get("output") if isinstance(query_plan.get("output"), dict) else {},
+            output_plan,
         )
+        analysis_facts = self._trend_overview_facts(
+            query_plan,
+            final_value,
+        )
+        if analysis_facts is None:
+            analysis_facts = self._main_metrics_overview_facts(
+                query_plan,
+                context,
+            )
+        if analysis_facts is None:
+            analysis_facts = self._ranking_overview_facts(
+                query_plan,
+                context,
+            )
+        if analysis_facts is None:
+            analysis_facts = self._direct_metric_values_facts(
+                query_plan,
+                context,
+            )
+        if analysis_facts is None:
+            analysis_facts = self._benchmark_comparison_facts(
+                query_plan,
+                final_value,
+            )
         return QueryPlanExecutionResult(
             columns=columns,
             rows=rows,
             summary=summary,
             warnings=[],
             execution_trace=trace,
+            analysis_facts=analysis_facts,
         )
+
+    @staticmethod
+    def _trend_overview_facts(
+        query_plan: dict[str, Any],
+        final_value: ExecutionValue,
+    ) -> TrendOverviewFacts | None:
+        if (
+            final_value.kind != "trend"
+            or not isinstance(final_value.data, dict)
+        ):
+            return None
+
+        raw_records = final_value.data.get("series")
+        if not isinstance(raw_records, list):
+            return None
+
+        records = [
+            item
+            for item in raw_records
+            if isinstance(item, dict)
+        ]
+        if not records:
+            return None
+
+        time_plan = query_plan.get("time")
+        time_plan = (
+            time_plan
+            if isinstance(time_plan, dict)
+            else {}
+        )
+
+        grain = time_plan.get("grain")
+        grain = (
+            grain
+            if isinstance(grain, str)
+            and grain
+            else "day"
+        )
+
+        performance_directions = {
+            "ZB001": "higher_is_better",
+            "ZB002": "higher_is_better",
+            "ZB011": "higher_is_better",
+            "ZB012": "lower_is_better",
+            "ZB013": "lower_is_better",
+            "ZB015": "higher_is_better",
+            "ZB016": "higher_is_better",
+            "ZB017": "lower_is_better",
+        }
+
+        grouped: dict[
+            tuple[str | None, str],
+            list[dict[str, Any]],
+        ] = defaultdict(list)
+
+        all_dates: list[str] = []
+
+        for record in records:
+            institution_id = record.get(
+                "institution_id"
+            )
+            institution_name = record.get(
+                "institution_name"
+            )
+            metric_id = record.get("metric_id")
+            metric_name = record.get("metric_name")
+            unit = record.get("unit")
+            data_date = record.get("date")
+            value = record.get("value")
+
+            if (
+                institution_id is not None
+                and not isinstance(
+                    institution_id,
+                    str,
+                )
+            ):
+                return None
+
+            if not all(
+                isinstance(item, str)
+                and item
+                for item in (
+                    institution_name,
+                    metric_id,
+                    metric_name,
+                    unit,
+                    data_date,
+                )
+            ):
+                return None
+
+            if value is None:
+                return None
+
+            try:
+                date.fromisoformat(data_date)
+            except ValueError:
+                return None
+
+            grouped[
+                (institution_id, metric_id)
+            ].append(record)
+            all_dates.append(data_date)
+
+        if not grouped or not all_dates:
+            return None
+
+        start_date = time_plan.get("start_date")
+        if not isinstance(start_date, str):
+            start_date = min(all_dates)
+
+        end_date = time_plan.get("end_date")
+        if not isinstance(end_date, str):
+            end_date = max(all_dates)
+
+        try:
+            parsed_start = date.fromisoformat(
+                start_date
+            )
+            parsed_end = date.fromisoformat(
+                end_date
+            )
+        except ValueError:
+            return None
+
+        if parsed_start > parsed_end:
+            return None
+
+        trend_series: list[TrendSeries] = []
+
+        for (
+            institution_id,
+            metric_id,
+        ), group in sorted(
+            grouped.items(),
+            key=lambda item: (
+                str(item[0][0] or ""),
+                item[0][1],
+            ),
+        ):
+            institution_names = {
+                str(item["institution_name"])
+                for item in group
+            }
+            metric_names = {
+                str(item["metric_name"])
+                for item in group
+            }
+            units = {
+                str(item["unit"])
+                for item in group
+            }
+
+            if (
+                len(institution_names) != 1
+                or len(metric_names) != 1
+                or len(units) != 1
+            ):
+                return None
+
+            ordered = sorted(
+                group,
+                key=lambda item: str(
+                    item["date"]
+                ),
+            )
+
+            point_dates = [
+                str(item["date"])
+                for item in ordered
+            ]
+            if len(point_dates) != len(
+                set(point_dates)
+            ):
+                return None
+
+            points = [
+                TrendPoint(
+                    data_date=str(item["date"]),
+                    value=(
+                        DeterministicQueryPlanExecutor
+                        ._json_scalar(item["value"])
+                    ),
+                )
+                for item in ordered
+            ]
+
+            trend_series.append(
+                TrendSeries(
+                    institution=InstitutionRef(
+                        institution_id=(
+                            institution_id
+                        ),
+                        institution_name=next(
+                            iter(
+                                institution_names
+                            )
+                        ),
+                    ),
+                    metric=MetricRef(
+                        metric_id=metric_id,
+                        metric_name=next(
+                            iter(metric_names)
+                        ),
+                        unit=next(iter(units)),
+                        performance_direction=(
+                            performance_directions.get(
+                                metric_id,
+                                "not_applicable",
+                            )
+                        ),
+                    ),
+                    points=points,
+                )
+            )
+
+        return TrendOverviewFacts(
+            start_date=start_date,
+            end_date=end_date,
+            grain=grain,
+            series=trend_series,
+        )
+
+    @staticmethod
+    def _main_metrics_overview_facts(
+        query_plan: dict[str, Any],
+        context: dict[str, ExecutionValue],
+    ) -> MainMetricsOverviewFacts | None:
+        metrics_plan = query_plan.get("metrics")
+        if not isinstance(metrics_plan, dict):
+            return None
+
+        concept_ids = metrics_plan.get("concept_ids")
+        if not isinstance(concept_ids, list):
+            return None
+
+        required_concepts = {
+            "BC001",
+            "BC002",
+            "BC003",
+        }
+        if not required_concepts.issubset(
+            {
+                value
+                for value in concept_ids
+                if isinstance(value, str)
+            }
+        ):
+            return None
+
+        expected_metric_ids = [
+            "ZB001",
+            "ZB002",
+            "ZB022",
+            "ZB013",
+            "ZB015",
+            "ZB016",
+            "ZB017",
+            "ZB011",
+            "ZB012",
+        ]
+        if (
+            metrics_plan.get("requested_metric_ids")
+            != expected_metric_ids
+        ):
+            return None
+
+        institutions = query_plan.get("institutions")
+        targets = (
+            institutions.get("targets")
+            if isinstance(institutions, dict)
+            else None
+        )
+        if not isinstance(targets, list) or len(targets) != 1:
+            return None
+
+        target = targets[0]
+        target_id = (
+            target.get("institution_id")
+            if isinstance(target, dict)
+            else None
+        )
+        if not isinstance(target_id, str):
+            return None
+
+        time_plan = query_plan.get("time")
+        dates = (
+            time_plan.get("dates")
+            if isinstance(time_plan, dict)
+            else None
+        )
+        if (
+            not isinstance(dates, list)
+            or len(dates) != 1
+            or not isinstance(dates[0], str)
+        ):
+            return None
+        period = dates[0]
+
+        performance_directions = {
+            "ZB001": "higher_is_better",
+            "ZB002": "higher_is_better",
+            "ZB013": "lower_is_better",
+            "ZB015": "higher_is_better",
+            "ZB016": "higher_is_better",
+            "ZB017": "lower_is_better",
+            "ZB011": "higher_is_better",
+            "ZB012": "lower_is_better",
+        }
+
+        def records_for(
+            output_ref: str,
+        ) -> list[dict[str, Any]] | None:
+            value = context.get(output_ref)
+            if (
+                not isinstance(value, ExecutionValue)
+                or value.kind != "records"
+                or not isinstance(value.data, list)
+            ):
+                return None
+            return [
+                item
+                for item in value.data
+                if isinstance(item, dict)
+            ]
+
+        metric_facts: list[MainMetricFact] = []
+        institution_name: str | None = None
+
+        for metric_id in expected_metric_ids:
+            metric_key = metric_id.lower()
+            rank_ref = (
+                "zb022_numeric_rank"
+                if metric_id == "ZB022"
+                else f"{metric_key}_performance_rank"
+            )
+            ranked_records = records_for(rank_ref)
+            if ranked_records is None:
+                return None
+
+            target_records = [
+                item
+                for item in ranked_records
+                if item.get("institution_id") == target_id
+            ]
+            if len(target_records) != 1:
+                return None
+
+            record = target_records[0]
+            required_values = (
+                record.get("institution_name"),
+                record.get("metric_name"),
+                record.get("unit"),
+                record.get("value"),
+                record.get("rank"),
+                record.get("date"),
+            )
+            if any(value is None for value in required_values):
+                return None
+
+            if record.get("date") != period:
+                return None
+
+            rank = record.get("rank")
+            if (
+                isinstance(rank, bool)
+                or not isinstance(rank, int)
+            ):
+                return None
+
+            current_name = record.get("institution_name")
+            if not isinstance(current_name, str):
+                return None
+            if institution_name is None:
+                institution_name = current_name
+            elif institution_name != current_name:
+                return None
+
+            performance_direction = (
+                performance_directions.get(metric_id)
+            )
+
+            if metric_id == "ZB022":
+                performance_band = "numeric_only"
+            else:
+                top_records = records_for(
+                    f"{metric_key}_top3"
+                )
+                bottom_records = records_for(
+                    f"{metric_key}_bottom4"
+                )
+                if (
+                    top_records is None
+                    or bottom_records is None
+                ):
+                    return None
+
+                in_top = any(
+                    item.get("institution_id") == target_id
+                    for item in top_records
+                )
+                in_bottom = any(
+                    item.get("institution_id") == target_id
+                    for item in bottom_records
+                )
+
+                if in_top and in_bottom:
+                    performance_band = "boundary_tie"
+                elif in_top:
+                    performance_band = "better"
+                elif in_bottom:
+                    performance_band = "worse"
+                else:
+                    performance_band = "middle"
+
+            metric_facts.append(
+                MainMetricFact(
+                    metric_id=metric_id,
+                    metric_name=str(
+                        record["metric_name"]
+                    ),
+                    value=(
+                        DeterministicQueryPlanExecutor
+                        ._json_scalar(record["value"])
+                    ),
+                    unit=str(record["unit"]),
+                    rank=rank,
+                    performance_direction=(
+                        performance_direction
+                    ),
+                    performance_band=performance_band,
+                )
+            )
+
+        if institution_name is None:
+            return None
+
+        return MainMetricsOverviewFacts(
+            subject=InstitutionRef(
+                institution_id=target_id,
+                institution_name=institution_name,
+            ),
+            period=period,
+            metrics=metric_facts,
+        )
+
+    @staticmethod
+    def _ranking_overview_facts(
+        query_plan: dict[str, Any],
+        context: dict[str, ExecutionValue],
+    ) -> RankingOverviewFacts | None:
+        operations = query_plan.get("operations")
+        if not isinstance(operations, list) or not operations:
+            return None
+
+        producers = {
+            operation.get("output_ref"): operation
+            for operation in operations
+            if (
+                isinstance(operation, dict)
+                and isinstance(
+                    operation.get("output_ref"),
+                    str,
+                )
+            )
+        }
+
+        final_operation = operations[-1]
+        if not isinstance(final_operation, dict):
+            return None
+
+        final_operator = final_operation.get(
+            "operator_id"
+        )
+
+        if final_operator == "OP019":
+            final_refs = final_operation.get(
+                "input_refs"
+            )
+            if (
+                not isinstance(final_refs, list)
+                or not final_refs
+                or not all(
+                    isinstance(ref, str)
+                    for ref in final_refs
+                )
+            ):
+                return None
+            selected_refs = list(final_refs)
+        elif final_operator in {
+            "OP011",
+            "OP012",
+            "OP013",
+        }:
+            output_ref = final_operation.get(
+                "output_ref"
+            )
+            if not isinstance(output_ref, str):
+                return None
+            selected_refs = [output_ref]
+        else:
+            return None
+
+        def records_for(
+            output_ref: str,
+        ) -> list[dict[str, Any]] | None:
+            value = context.get(output_ref)
+            if (
+                not isinstance(value, ExecutionValue)
+                or value.kind != "records"
+                or not isinstance(value.data, list)
+            ):
+                return None
+
+            records = [
+                item
+                for item in value.data
+                if isinstance(item, dict)
+            ]
+            return records if records else None
+
+        def ranking_lineage(
+            selected_ref: str,
+        ) -> tuple[
+            str,
+            dict[str, Any],
+            dict[str, Any] | None,
+        ] | None:
+            selected_operation = producers.get(
+                selected_ref
+            )
+            if not isinstance(
+                selected_operation,
+                dict,
+            ):
+                return None
+
+            operator_id = selected_operation.get(
+                "operator_id"
+            )
+
+            if operator_id in {"OP011", "OP012"}:
+                return (
+                    selected_ref,
+                    selected_operation,
+                    None,
+                )
+
+            if operator_id != "OP013":
+                return None
+
+            input_refs = selected_operation.get(
+                "input_refs"
+            )
+            if (
+                not isinstance(input_refs, list)
+                or len(input_refs) != 1
+                or not isinstance(input_refs[0], str)
+            ):
+                return None
+
+            rank_ref = input_refs[0]
+            rank_operation = producers.get(rank_ref)
+
+            if (
+                not isinstance(rank_operation, dict)
+                or rank_operation.get("operator_id")
+                not in {"OP011", "OP012"}
+            ):
+                return None
+
+            return (
+                rank_ref,
+                rank_operation,
+                selected_operation,
+            )
+
+        lineages: list[
+            tuple[
+                str,
+                str,
+                dict[str, Any],
+                dict[str, Any] | None,
+            ]
+        ] = []
+
+        for selected_ref in selected_refs:
+            lineage = ranking_lineage(
+                selected_ref
+            )
+            if lineage is None:
+                return None
+
+            rank_ref, rank_operation, take_operation = (
+                lineage
+            )
+            lineages.append(
+                (
+                    selected_ref,
+                    rank_ref,
+                    rank_operation,
+                    take_operation,
+                )
+            )
+
+        institutions_plan = query_plan.get(
+            "institutions"
+        )
+        targets = (
+            institutions_plan.get("targets")
+            if isinstance(
+                institutions_plan,
+                dict,
+            )
+            else []
+        )
+        targets = (
+            targets
+            if isinstance(targets, list)
+            else []
+        )
+
+        target_ids = {
+            item.get("institution_id")
+            for item in targets
+            if (
+                isinstance(item, dict)
+                and isinstance(
+                    item.get("institution_id"),
+                    str,
+                )
+            )
+        }
+
+        metrics_plan = query_plan.get("metrics")
+        requested_metric_ids = (
+            metrics_plan.get(
+                "requested_metric_ids"
+            )
+            if isinstance(metrics_plan, dict)
+            else []
+        )
+        requested_metric_ids = [
+            metric_id
+            for metric_id in requested_metric_ids
+            if isinstance(metric_id, str)
+        ]
+
+        grouped: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        take_directions: set[str] = set()
+        take_sizes: set[int] = set()
+        all_dates: set[str] = set()
+
+        for (
+            selected_ref,
+            rank_ref,
+            rank_operation,
+            take_operation,
+        ) in lineages:
+            selected_records = records_for(
+                selected_ref
+            )
+            ranked_records = records_for(rank_ref)
+
+            if (
+                selected_records is None
+                or ranked_records is None
+            ):
+                return None
+
+            rank_operator = rank_operation.get(
+                "operator_id"
+            )
+            rank_parameters = rank_operation.get(
+                "parameters"
+            )
+            rank_parameters = (
+                rank_parameters
+                if isinstance(rank_parameters, dict)
+                else {}
+            )
+
+            if rank_operator == "OP012":
+                performance_direction = (
+                    rank_parameters.get(
+                        "performance_direction"
+                    )
+                )
+                if performance_direction not in {
+                    "higher_is_better",
+                    "lower_is_better",
+                }:
+                    return None
+                ranking_method = "performance"
+            elif rank_operator == "OP011":
+                order = rank_parameters.get(
+                    "order"
+                )
+                if order not in {
+                    "ascending",
+                    "descending",
+                }:
+                    return None
+                performance_direction = (
+                    "not_applicable"
+                )
+                ranking_method = "numeric"
+            else:
+                return None
+
+            if take_operation is not None:
+                take_parameters = take_operation.get(
+                    "parameters"
+                )
+                take_parameters = (
+                    take_parameters
+                    if isinstance(
+                        take_parameters,
+                        dict,
+                    )
+                    else {}
+                )
+                direction = take_parameters.get(
+                    "direction"
+                )
+                n = take_parameters.get("n")
+
+                if direction not in {
+                    "top",
+                    "bottom",
+                }:
+                    return None
+                if (
+                    isinstance(n, bool)
+                    or not isinstance(n, int)
+                    or n < 1
+                ):
+                    return None
+
+                take_directions.add(direction)
+                take_sizes.add(n)
+
+            full_groups: dict[
+                tuple[str, str],
+                list[dict[str, Any]],
+            ] = defaultdict(list)
+
+            for record in ranked_records:
+                metric_id = record.get("metric_id")
+                data_date = record.get("date")
+
+                if (
+                    not isinstance(metric_id, str)
+                    or not isinstance(data_date, str)
+                ):
+                    return None
+
+                full_groups[
+                    (data_date, metric_id)
+                ].append(record)
+
+            selected_groups: dict[
+                tuple[str, str],
+                list[dict[str, Any]],
+            ] = defaultdict(list)
+
+            for record in selected_records:
+                metric_id = record.get("metric_id")
+                data_date = record.get("date")
+
+                if (
+                    not isinstance(metric_id, str)
+                    or not isinstance(data_date, str)
+                ):
+                    return None
+
+                selected_groups[
+                    (data_date, metric_id)
+                ].append(record)
+
+            for (
+                data_date,
+                metric_id,
+            ), selected_group in selected_groups.items():
+                full_group = full_groups.get(
+                    (data_date, metric_id)
+                )
+                if not full_group:
+                    return None
+
+                all_dates.add(data_date)
+
+                metric_names = {
+                    item.get("metric_name")
+                    for item in full_group
+                }
+                units = {
+                    item.get("unit")
+                    for item in full_group
+                }
+
+                if (
+                    len(metric_names) != 1
+                    or len(units) != 1
+                ):
+                    return None
+
+                metric_name = next(
+                    iter(metric_names)
+                )
+                unit = next(iter(units))
+
+                if (
+                    not isinstance(metric_name, str)
+                    or not isinstance(unit, str)
+                ):
+                    return None
+
+                population_ids = {
+                    item.get("institution_id")
+                    for item in full_group
+                    if isinstance(
+                        item.get("institution_id"),
+                        str,
+                    )
+                }
+                if not population_ids:
+                    return None
+
+                group = grouped.get(metric_id)
+
+                if group is None:
+                    group = {
+                        "metric_name": metric_name,
+                        "unit": unit,
+                        "performance_direction": (
+                            performance_direction
+                        ),
+                        "ranking_method": (
+                            ranking_method
+                        ),
+                        "population_size": len(
+                            population_ids
+                        ),
+                        "items": {},
+                    }
+                    grouped[metric_id] = group
+                elif (
+                    group["metric_name"]
+                    != metric_name
+                    or group["unit"] != unit
+                    or group[
+                        "performance_direction"
+                    ]
+                    != performance_direction
+                    or group["ranking_method"]
+                    != ranking_method
+                    or group["population_size"]
+                    != len(population_ids)
+                ):
+                    return None
+
+                items = group["items"]
+
+                for record in selected_group:
+                    institution_id = record.get(
+                        "institution_id"
+                    )
+                    institution_name = record.get(
+                        "institution_name"
+                    )
+                    value = record.get("value")
+                    rank = record.get("rank")
+
+                    if (
+                        not isinstance(
+                            institution_id,
+                            str,
+                        )
+                        or not isinstance(
+                            institution_name,
+                            str,
+                        )
+                        or value is None
+                        or isinstance(rank, bool)
+                        or not isinstance(rank, int)
+                        or rank < 1
+                    ):
+                        return None
+
+                    current = (
+                        institution_name,
+                        value,
+                        rank,
+                    )
+                    previous = items.get(
+                        institution_id
+                    )
+
+                    if (
+                        previous is not None
+                        and previous != current
+                    ):
+                        return None
+
+                    items[institution_id] = current
+
+        if not grouped or len(all_dates) != 1:
+            return None
+
+        period = next(iter(all_dates))
+
+        population_sizes = {
+            int(group["population_size"])
+            for group in grouped.values()
+        }
+
+        has_partial_take = (
+            bool(take_sizes)
+            and bool(population_sizes)
+            and any(
+                take_size < population_size
+                for take_size in take_sizes
+                for population_size
+                in population_sizes
+            )
+        )
+
+        if take_directions and (
+            not target_ids
+            or has_partial_take
+        ):
+            if (
+                len(take_directions) != 1
+                or len(take_sizes) != 1
+            ):
+                return None
+
+            direction = next(
+                iter(take_directions)
+            )
+            selection_mode = (
+                "top_n"
+                if direction == "top"
+                else "bottom_n"
+            )
+            requested_n = next(iter(take_sizes))
+        elif target_ids:
+            selection_mode = "target"
+            requested_n = None
+        else:
+            selection_mode = "full"
+            requested_n = None
+
+        ordered_metric_ids = [
+            metric_id
+            for metric_id in requested_metric_ids
+            if metric_id in grouped
+        ]
+        ordered_metric_ids.extend(
+            metric_id
+            for metric_id in sorted(grouped)
+            if metric_id
+            not in ordered_metric_ids
+        )
+
+        rankings: list[
+            MetricRankingFacts
+        ] = []
+
+        for metric_id in ordered_metric_ids:
+            group = grouped[metric_id]
+            raw_items = group["items"]
+
+            selected_items = [
+                (
+                    institution_id,
+                    institution_name,
+                    value,
+                    rank,
+                )
+                for (
+                    institution_id,
+                    (
+                        institution_name,
+                        value,
+                        rank,
+                    ),
+                ) in raw_items.items()
+                if (
+                    not target_ids
+                    or institution_id in target_ids
+                )
+            ]
+
+            selected_items.sort(
+                key=lambda item: (
+                    item[3],
+                    item[1],
+                    item[0],
+                )
+            )
+
+            if not selected_items:
+                return None
+
+            rankings.append(
+                MetricRankingFacts(
+                    metric=MetricRef(
+                        metric_id=metric_id,
+                        metric_name=group[
+                            "metric_name"
+                        ],
+                        unit=group["unit"],
+                        performance_direction=group[
+                            "performance_direction"
+                        ],
+                    ),
+                    items=[
+                        RankingItem(
+                            institution=InstitutionRef(
+                                institution_id=(
+                                    institution_id
+                                ),
+                                institution_name=(
+                                    institution_name
+                                ),
+                            ),
+                            value=(
+                                DeterministicQueryPlanExecutor
+                                ._json_scalar(value)
+                            ),
+                            rank=rank,
+                        )
+                        for (
+                            institution_id,
+                            institution_name,
+                            value,
+                            rank,
+                        ) in selected_items
+                    ],
+                    population_size=group[
+                        "population_size"
+                    ],
+                    ranking_method=group[
+                        "ranking_method"
+                    ],
+                )
+            )
+
+        if not rankings:
+            return None
+
+        return RankingOverviewFacts(
+            period=period,
+            rankings=rankings,
+            selection_mode=selection_mode,
+            requested_n=requested_n,
+        )
+
+    @staticmethod
+    def _direct_metric_values_facts(
+        query_plan: dict[str, Any],
+        context: dict[str, ExecutionValue],
+    ) -> DirectMetricValuesFacts | None:
+        operations = query_plan.get("operations")
+        if (
+            not isinstance(operations, list)
+            or not operations
+        ):
+            return None
+
+        producers: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        for operation in operations:
+            if not isinstance(operation, dict):
+                return None
+
+            output_ref = operation.get("output_ref")
+            operator_id = operation.get(
+                "operator_id"
+            )
+
+            if (
+                not isinstance(output_ref, str)
+                or not isinstance(
+                    operator_id,
+                    str,
+                )
+                or output_ref in producers
+            ):
+                return None
+
+            producers[output_ref] = operation
+
+        final_operation = operations[-1]
+        final_operator = final_operation.get(
+            "operator_id"
+        )
+        final_ref = final_operation.get(
+            "output_ref"
+        )
+
+        if not isinstance(final_ref, str):
+            return None
+
+        if final_operator == "OP001":
+            if len(operations) != 1:
+                return None
+
+            selected_refs = [final_ref]
+
+        elif final_operator == "OP019":
+            input_refs = final_operation.get(
+                "input_refs"
+            )
+
+            if (
+                not isinstance(input_refs, list)
+                or len(input_refs) < 2
+                or not all(
+                    isinstance(ref, str)
+                    for ref in input_refs
+                )
+                or len(input_refs)
+                != len(set(input_refs))
+            ):
+                return None
+
+            direct_operations = operations[:-1]
+
+            if any(
+                operation.get("operator_id")
+                != "OP001"
+                for operation
+                in direct_operations
+            ):
+                return None
+
+            direct_output_refs = [
+                operation.get("output_ref")
+                for operation
+                in direct_operations
+            ]
+
+            if (
+                not all(
+                    isinstance(ref, str)
+                    for ref
+                    in direct_output_refs
+                )
+                or len(direct_output_refs)
+                != len(input_refs)
+                or set(direct_output_refs)
+                != set(input_refs)
+            ):
+                return None
+
+            selected_refs = list(input_refs)
+
+        else:
+            return None
+
+        metrics_plan = query_plan.get("metrics")
+        if not isinstance(metrics_plan, dict):
+            return None
+
+        requested_metric_ids = (
+            metrics_plan.get(
+                "requested_metric_ids"
+            )
+        )
+        source_metric_ids = metrics_plan.get(
+            "source_metric_ids"
+        )
+
+        if (
+            not isinstance(
+                requested_metric_ids,
+                list,
+            )
+            or not requested_metric_ids
+            or not all(
+                isinstance(metric_id, str)
+                for metric_id
+                in requested_metric_ids
+            )
+            or len(requested_metric_ids)
+            != len(set(requested_metric_ids))
+            or not isinstance(
+                source_metric_ids,
+                list,
+            )
+            or not all(
+                isinstance(metric_id, str)
+                for metric_id
+                in source_metric_ids
+            )
+            or len(source_metric_ids)
+            != len(set(source_metric_ids))
+            or set(requested_metric_ids)
+            != set(source_metric_ids)
+        ):
+            return None
+
+        institutions_plan = query_plan.get(
+            "institutions"
+        )
+        targets = (
+            institutions_plan.get("targets")
+            if isinstance(
+                institutions_plan,
+                dict,
+            )
+            else None
+        )
+
+        if (
+            not isinstance(targets, list)
+            or len(targets) != 1
+            or not isinstance(targets[0], dict)
+        ):
+            return None
+
+        planned_target_id = targets[0].get(
+            "institution_id"
+        )
+
+        if not isinstance(
+            planned_target_id,
+            str,
+        ):
+            return None
+
+        records_by_metric: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        institution_ids: set[str] = set()
+        institution_names: set[str] = set()
+        dates: set[str] = set()
+
+        for output_ref in selected_refs:
+            operation = producers.get(output_ref)
+
+            if (
+                not isinstance(operation, dict)
+                or operation.get("operator_id")
+                != "OP001"
+            ):
+                return None
+
+            input_refs = operation.get(
+                "input_refs"
+            )
+            parameters = operation.get(
+                "parameters"
+            )
+
+            if (
+                not isinstance(input_refs, list)
+                or len(input_refs) != 1
+                or not isinstance(
+                    input_refs[0],
+                    str,
+                )
+                or not isinstance(
+                    parameters,
+                    dict,
+                )
+                or not isinstance(
+                    parameters.get("date"),
+                    str,
+                )
+            ):
+                return None
+
+            planned_metric_id = input_refs[0]
+            planned_date = parameters["date"]
+
+            if parameters.get(
+                "institution_id"
+            ) != planned_target_id:
+                return None
+
+            value = context.get(output_ref)
+
+            if (
+                not isinstance(
+                    value,
+                    ExecutionValue,
+                )
+                or value.kind != "records"
+                or not isinstance(
+                    value.data,
+                    list,
+                )
+                or len(value.data) != 1
+                or not isinstance(
+                    value.data[0],
+                    dict,
+                )
+            ):
+                return None
+
+            record = value.data[0]
+
+            institution_id = record.get(
+                "institution_id"
+            )
+            institution_name = record.get(
+                "institution_name"
+            )
+            data_date = record.get("date")
+            metric_id = record.get("metric_id")
+            metric_name = record.get(
+                "metric_name"
+            )
+            unit = record.get("unit")
+            metric_value = record.get("value")
+
+            if (
+                not isinstance(
+                    institution_id,
+                    str,
+                )
+                or not isinstance(
+                    institution_name,
+                    str,
+                )
+                or not isinstance(
+                    data_date,
+                    str,
+                )
+                or not isinstance(metric_id, str)
+                or not isinstance(
+                    metric_name,
+                    str,
+                )
+                or not isinstance(unit, str)
+                or metric_value is None
+                or institution_id
+                != planned_target_id
+                or data_date != planned_date
+                or metric_id
+                != planned_metric_id
+                or metric_id
+                not in requested_metric_ids
+                or metric_id
+                in records_by_metric
+            ):
+                return None
+
+            institution_ids.add(
+                institution_id
+            )
+            institution_names.add(
+                institution_name
+            )
+            dates.add(data_date)
+            records_by_metric[
+                metric_id
+            ] = record
+
+        if (
+            set(records_by_metric)
+            != set(requested_metric_ids)
+            or len(institution_ids) != 1
+            or len(institution_names) != 1
+            or len(dates) != 1
+        ):
+            return None
+
+        institution_id = next(
+            iter(institution_ids)
+        )
+        institution_name = next(
+            iter(institution_names)
+        )
+        period = next(iter(dates))
+
+        return DirectMetricValuesFacts(
+            subject=InstitutionRef(
+                institution_id=institution_id,
+                institution_name=(
+                    institution_name
+                ),
+            ),
+            period=period,
+            metrics=[
+                DirectMetricValueFact(
+                    metric_id=metric_id,
+                    metric_name=str(
+                        records_by_metric[
+                            metric_id
+                        ]["metric_name"]
+                    ),
+                    value=(
+                        DeterministicQueryPlanExecutor
+                        ._json_scalar(
+                            records_by_metric[
+                                metric_id
+                            ]["value"]
+                        )
+                    ),
+                    unit=str(
+                        records_by_metric[
+                            metric_id
+                        ]["unit"]
+                    ),
+                )
+                for metric_id
+                in requested_metric_ids
+            ],
+        )
+
+    @staticmethod
+    def _benchmark_comparison_facts(
+        query_plan: dict[str, Any],
+        final_value: ExecutionValue,
+    ) -> BenchmarkComparisonFacts | None:
+        operations = query_plan.get("operations")
+        if not isinstance(operations, list) or not operations:
+            return None
+        final_operation = operations[-1]
+        if (
+            not isinstance(final_operation, dict)
+            or final_operation.get("operator_id") != "OP003"
+            or final_value.kind != "scalar"
+            or final_value.data.get("operation") != "difference"
+        ):
+            return None
+        input_refs = final_operation.get("input_refs")
+        if not isinstance(input_refs, list) or len(input_refs) != 2:
+            return None
+        producers = {
+            item.get("output_ref"): item
+            for item in operations
+            if isinstance(item, dict) and isinstance(item.get("output_ref"), str)
+        }
+        benchmark_operation = producers.get(input_refs[1])
+        if (
+            not isinstance(benchmark_operation, dict)
+            or benchmark_operation.get("operator_id") != "OP010"
+        ):
+            return None
+
+        left = final_value.data.get("left_record")
+        right = final_value.data.get("right_record")
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            return None
+        required = (
+            left.get("institution_name"),
+            left.get("metric_id"),
+            left.get("metric_name"),
+            left.get("date"),
+            left.get("unit"),
+            left.get("value"),
+            right.get("value"),
+        )
+        if any(item is None for item in required):
+            return None
+        if (
+            right.get("institution_id") is not None
+            or right.get("metric_id") != left.get("metric_id")
+            or right.get("date") != left.get("date")
+        ):
+            return None
+
+        metric_id = str(left["metric_id"])
+        performance_directions = {
+            "ZB001": "higher_is_better",
+            "ZB002": "higher_is_better",
+            "ZB011": "higher_is_better",
+            "ZB012": "lower_is_better",
+            "ZB013": "lower_is_better",
+            "ZB015": "higher_is_better",
+            "ZB016": "higher_is_better",
+            "ZB017": "lower_is_better",
+        }
+        performance_direction = performance_directions.get(metric_id)
+        if performance_direction is None:
+            return None
+        difference = Decimal(str(final_value.data.get("value")))
+        relative_position = (
+            "above" if difference > 0 else "below" if difference < 0 else "equal"
+        )
+        if difference == 0:
+            assessment = "equal"
+        elif performance_direction == "lower_is_better":
+            assessment = "better" if difference < 0 else "worse"
+        else:
+            assessment = "better" if difference > 0 else "worse"
+        unit = str(left["unit"])
+        return BenchmarkComparisonFacts(
+            subject=InstitutionRef(
+                institution_id=(
+                    str(left["institution_id"])
+                    if left.get("institution_id") is not None
+                    else None
+                ),
+                institution_name=str(left["institution_name"]),
+            ),
+            metric=MetricRef(
+                metric_id=metric_id,
+                metric_name=str(left["metric_name"]),
+                unit=unit,
+                performance_direction=performance_direction,
+            ),
+            period=str(left["date"]),
+            target_value=DeterministicQueryPlanExecutor._json_scalar(left["value"]),
+            benchmark_name=str(
+                right.get("institution_name") or "全省13家农商行平均值"
+            ).replace("均值", "平均值"),
+            benchmark_value=DeterministicQueryPlanExecutor._json_scalar(
+                right["value"]
+            ),
+            difference=DeterministicQueryPlanExecutor._json_scalar(difference),
+            difference_unit="百分点" if unit == "%" else unit,
+            relative_position=relative_position,
+            performance_assessment=assessment,
+        )
+
+    @staticmethod
+    def _json_scalar(value: object) -> JsonScalar:
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
 
     def _dispatch(
         self,
@@ -179,23 +1774,10 @@ class DeterministicQueryPlanExecutor:
                 current_institution,
                 parameters,
             )
-            if not sql.lstrip().upper().startswith("SELECT "):
-                raise QueryExecutionError("查询计划执行器只允许固定 SELECT 模板。")
-            logger.info(
-                "query_plan_select sql=%s parameters=%s",
-                " ".join(sql.split()),
-                json.dumps(sql_parameters, ensure_ascii=False, sort_keys=True),
-            )
             result = self.database_executor.execute_query(
                 sql,
                 sql_parameters,
                 max_rows=1000,
-            )
-            logger.info(
-                "query_plan_select_completed metric_id=%s institution_id=%s row_count=%s",
-                metric_id,
-                current_institution,
-                result.row_count,
             )
             if result.truncated:
                 raise QueryExecutionError("OP001 查询结果超过单机构1000行限制。")
@@ -368,14 +1950,73 @@ class DeterministicQueryPlanExecutor:
         parameters: dict[str, Any],
     ) -> ExecutionValue:
         self._require_input_count(inputs, 2, "OP006")
+        result_unit_raw = parameters.get("result_unit") or parameters.get("unit")
+        result_unit = str(result_unit_raw) if result_unit_raw is not None else "%"
+        multiplier_raw = parameters.get("multiplier")
+        if multiplier_raw is None:
+            multiplier = Decimal(100) if result_unit == "%" else Decimal(1)
+        else:
+            multiplier = self._decimal(multiplier_raw, "OP006.multiplier")
+        if multiplier <= 0:
+            raise QueryExecutionError("OP006.multiplier 必须大于0。")
+
+        result_metric_id, result_metric_name = self._ratio_metric_metadata(
+            inputs,
+            parameters,
+        )
         return self._binary_transform(
             inputs[0],
             inputs[1],
-            self._ratio,
-            "ratio",
-            result_unit="%",
+            lambda numerator, denominator: self._quotient(
+                numerator,
+                denominator,
+                multiplier,
+            ),
+            "ratio" if result_unit == "%" else "quotient",
+            result_unit=result_unit,
             require_same_unit=False,
+            cross_metric_alignment=True,
+            result_metric_id=result_metric_id,
+            result_metric_name=result_metric_name,
         )
+
+    def _ratio_metric_metadata(
+        self,
+        inputs: list[ExecutionValue],
+        parameters: dict[str, Any],
+    ) -> tuple[str | None, str | None]:
+        explicit_id = parameters.get("result_metric_id")
+        explicit_name = parameters.get("result_metric_name")
+        if isinstance(explicit_id, str) or isinstance(explicit_name, str):
+            return (
+                explicit_id if isinstance(explicit_id, str) else None,
+                explicit_name if isinstance(explicit_name, str) else None,
+            )
+
+        def single_metric_id(value: ExecutionValue) -> str | None:
+            if value.kind != "records":
+                return None
+            ids = {
+                str(item.get("metric_id"))
+                for item in self._records(value)
+                if isinstance(item.get("metric_id"), str)
+            }
+            return next(iter(ids)) if len(ids) == 1 else None
+
+        numerator_id = single_metric_id(inputs[0])
+        denominator_id = single_metric_id(inputs[1])
+        known = {
+            ("ZB002", "ZB001"): ("ZB022", "存贷比"),
+            ("ZB008", "ZB009"): (
+                "ZB034",
+                "净利息收入占营业收入比重",
+            ),
+            ("ZB007", "ZB009"): (
+                None,
+                "中间业务收入占营业收入比重",
+            ),
+        }
+        return known.get((numerator_id, denominator_id), (None, None))
 
     def _op_growth(
         self,
@@ -410,8 +2051,7 @@ class DeterministicQueryPlanExecutor:
         inputs: list[ExecutionValue],
         parameters: dict[str, Any],
     ) -> ExecutionValue:
-        self._require_input_count(inputs, 1, "OP009")
-        records = self._records(inputs[0])
+        records, input_unit = self._combined_records(inputs, "OP009")
         grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
         for record in records:
             grouped[
@@ -440,7 +2080,7 @@ class DeterministicQueryPlanExecutor:
                     "record_count": len(group),
                 }
             )
-        return ExecutionValue(kind="records", data=output, unit=inputs[0].unit)
+        return ExecutionValue(kind="records", data=output, unit=input_unit)
 
     def _op_province_average(
         self,
@@ -484,12 +2124,12 @@ class DeterministicQueryPlanExecutor:
         inputs: list[ExecutionValue],
         parameters: dict[str, Any],
     ) -> ExecutionValue:
-        self._require_input_count(inputs, 1, "OP011")
+        records, _ = self._combined_records(inputs, "OP011")
         order = parameters.get("order")
         if order not in {"ascending", "descending"}:
             raise QueryExecutionError("OP011.order 不合法。")
         return self._rank_records(
-            self._records(inputs[0]),
+            records,
             reverse=order == "descending",
         )
 
@@ -498,14 +2138,39 @@ class DeterministicQueryPlanExecutor:
         inputs: list[ExecutionValue],
         parameters: dict[str, Any],
     ) -> ExecutionValue:
-        self._require_input_count(inputs, 1, "OP012")
+        records, _ = self._combined_records(inputs, "OP012")
         direction = parameters.get("performance_direction")
         if direction not in {"higher_is_better", "lower_is_better"}:
             raise QueryExecutionError("OP012.performance_direction 不合法。")
         return self._rank_records(
-            self._records(inputs[0]),
+            records,
             reverse=direction == "higher_is_better",
         )
+
+    def _combined_records(
+        self,
+        inputs: list[ExecutionValue],
+        operator_id: str,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        if not inputs:
+            raise QueryExecutionError(f"{operator_id} 至少需要1个输入。")
+        records: list[dict[str, Any]] = []
+        units: set[str] = set()
+        for value in inputs:
+            current_records = self._records(value)
+            records.extend(dict(item) for item in current_records)
+            if value.unit:
+                units.add(str(value.unit))
+            units.update(
+                str(item.get("unit"))
+                for item in current_records
+                if item.get("unit") is not None
+            )
+        if not records:
+            raise QueryExecutionError(f"{operator_id} 没有可处理的记录。")
+        if len(units) > 1:
+            raise QueryExecutionError(f"{operator_id} 输入记录单位不一致。")
+        return records, next(iter(units)) if units else None
 
     def _op_take_n(
         self,
@@ -536,14 +2201,37 @@ class DeterministicQueryPlanExecutor:
                     or item in group[:n]
                 ]
             else:
-                boundary_index = len(group) - n
-                boundary = self._decimal(group[boundary_index].get("value"), "OP013")
-                selected = [
-                    item
+                ranks = [
+                    item.get("rank")
                     for item in group
-                    if item in group[boundary_index:]
-                    or self._decimal(item.get("value"), "OP013") == boundary
                 ]
+                if all(
+                    isinstance(rank, int)
+                    and not isinstance(rank, bool)
+                    for rank in ranks
+                ):
+                    threshold_rank = len(group) - n + 1
+                    selected = [
+                        item
+                        for item in group
+                        if int(item["rank"]) >= threshold_rank
+                    ]
+                else:
+                    boundary_index = len(group) - n
+                    boundary = self._decimal(
+                        group[boundary_index].get("value"),
+                        "OP013",
+                    )
+                    selected = [
+                        item
+                        for item in group
+                        if item in group[boundary_index:]
+                        or self._decimal(
+                            item.get("value"),
+                            "OP013",
+                        )
+                        == boundary
+                    ]
             output.extend(selected)
         return ExecutionValue(kind="records", data=output, unit=inputs[0].unit)
 
@@ -559,12 +2247,20 @@ class DeterministicQueryPlanExecutor:
             raise QueryExecutionError("OP014.type 必须是 max 或 min。")
         values = [self._decimal(item.get("value"), "OP014") for item in records]
         extreme = max(values) if extreme_type == "max" else min(values)
-        selected = [
-            dict(item)
-            for item in records
-            if self._decimal(item.get("value"), "OP014") == extreme
-        ]
-        return ExecutionValue(kind="records", data=selected, unit=inputs[0].unit)
+        selected: list[dict[str, Any]] = []
+        result_type = "maximum" if extreme_type == "max" else "minimum"
+        for item in records:
+            if self._decimal(item.get("value"), "OP014") != extreme:
+                continue
+            current = dict(item)
+            current["result_type"] = result_type
+            selected.append(current)
+        return ExecutionValue(
+            kind="records",
+            data=selected,
+            unit=inputs[0].unit,
+            metadata={"result_type": result_type},
+        )
 
     def _op_threshold(
         self,
@@ -612,7 +2308,55 @@ class DeterministicQueryPlanExecutor:
                 comparison_operator,
             )
         ]
-        return ExecutionValue(kind="records", data=selected, unit=inputs[0].unit)
+        count_by, count_unit = self._infer_count_dimension(records)
+        if count_by == "date":
+            population_count = len(
+                {
+                    item.get("date")
+                    for item in records
+                    if item.get("date") is not None
+                }
+            )
+        elif count_by == "institution":
+            population_count = len(
+                {
+                    item.get("institution_id")
+                    for item in records
+                    if item.get("institution_id") is not None
+                }
+            )
+        else:
+            population_count = len(records)
+        return ExecutionValue(
+            kind="records",
+            data=selected,
+            unit=inputs[0].unit,
+            metadata={
+                "count_by": count_by,
+                "count_unit": count_unit,
+                "population_count": population_count,
+            },
+        )
+
+    @staticmethod
+    def _infer_count_dimension(
+        records: list[dict[str, Any]],
+    ) -> tuple[str, str]:
+        dates = {
+            item.get("date")
+            for item in records
+            if item.get("date") is not None
+        }
+        institutions = {
+            item.get("institution_id")
+            for item in records
+            if item.get("institution_id") is not None
+        }
+        if len(dates) > 1 and len(institutions) <= 1:
+            return "date", "天"
+        if len(institutions) > 1 and len(dates) <= 1:
+            return "institution", "家"
+        return "record", "条"
 
     def _op_count(
         self,
@@ -621,15 +2365,78 @@ class DeterministicQueryPlanExecutor:
     ) -> ExecutionValue:
         self._require_input_count(inputs, 1, "OP017")
         value = inputs[0]
+        requested_count_by = parameters.get("count_by")
+        count_by = (
+            requested_count_by
+            if requested_count_by in {"date", "institution", "record"}
+            else value.metadata.get("count_by")
+        )
+        if count_by not in {"date", "institution", "record"}:
+            count_by = "record"
+
         if value.kind == "records":
-            count = len(value.data)
+            records = self._records(value)
+            if count_by == "date":
+                count = len(
+                    {
+                        item.get("date")
+                        for item in records
+                        if item.get("date") is not None
+                    }
+                )
+            elif count_by == "institution":
+                count = len(
+                    {
+                        item.get("institution_id")
+                        for item in records
+                        if item.get("institution_id") is not None
+                    }
+                )
+            else:
+                count = len(records)
         elif value.kind == "composite":
             count = len(value.data.get("items", []))
         elif isinstance(value.data, list):
             count = len(value.data)
         else:
             count = 1
-        return ExecutionValue(kind="count", data={"count": count}, unit=None)
+
+        unit = parameters.get("unit")
+        if not isinstance(unit, str) or not unit:
+            unit = value.metadata.get("count_unit")
+        if not isinstance(unit, str) or not unit:
+            unit = {
+                "date": "天",
+                "institution": "家",
+                "record": "条",
+            }[count_by]
+        population_count = value.metadata.get("population_count")
+        share_percent: Decimal | None = None
+        if (
+            isinstance(population_count, int)
+            and population_count > 0
+            and count_by == "date"
+        ):
+            share_percent = (
+                Decimal(count)
+                / Decimal(population_count)
+                * Decimal(100)
+            )
+        return ExecutionValue(
+            kind="count",
+            data={
+                "count": count,
+                "count_by": count_by,
+                "population_count": population_count,
+                "share_percent": share_percent,
+            },
+            unit=unit,
+            metadata={
+                "count_by": count_by,
+                "count_unit": unit,
+                "population_count": population_count,
+            },
+        )
 
     def _op_trend(
         self,
@@ -766,22 +2573,56 @@ class DeterministicQueryPlanExecutor:
         result_name: str,
         result_unit: str | None = None,
         require_same_unit: bool = True,
+        cross_metric_alignment: bool = False,
+        result_metric_id: str | None = None,
+        result_metric_name: str | None = None,
     ) -> ExecutionValue:
         if left.kind == "records" and right.kind == "records":
             left_records = self._records(left)
             right_records = self._records(right)
             if len(left_records) == len(right_records) == 1:
-                left_value = self._decimal(left_records[0].get("value"), result_name)
-                right_value = self._decimal(right_records[0].get("value"), result_name)
+                left_record = left_records[0]
+                right_record = right_records[0]
+                left_value = self._decimal(
+                    left_record.get("value"),
+                    result_name,
+                )
+                right_value = self._decimal(
+                    right_record.get("value"),
+                    result_name,
+                )
                 if require_same_unit:
                     self._require_same_unit(
-                        [left_records[0].get("unit"), right_records[0].get("unit")],
+                        [
+                            left_record.get("unit"),
+                            right_record.get("unit"),
+                        ],
                         result_name,
                     )
+                inferred_metric_name = result_metric_name
+                if (
+                    inferred_metric_name is None
+                    and left_record.get("metric_id")
+                    == right_record.get("metric_id")
+                ):
+                    inferred_metric_name = left_record.get("metric_name")
+                metadata = {
+                    "operation": result_name,
+                    "metric_id": result_metric_id,
+                    "metric_name": inferred_metric_name,
+                }
                 return ExecutionValue(
                     kind="scalar",
-                    data={"value": function(left_value, right_value)},
-                    unit=result_unit or left_records[0].get("unit"),
+                    data={
+                        "value": function(left_value, right_value),
+                        "left_value": left_value,
+                        "right_value": right_value,
+                        "left_record": dict(left_record),
+                        "right_record": dict(right_record),
+                        "operation": result_name,
+                    },
+                    unit=result_unit or left_record.get("unit"),
+                    metadata=metadata,
                 )
             return self._aligned_record_transform(
                 left_records,
@@ -789,6 +2630,9 @@ class DeterministicQueryPlanExecutor:
                 function,
                 result_unit=result_unit,
                 require_same_unit=require_same_unit,
+                cross_metric_alignment=cross_metric_alignment,
+                result_metric_id=result_metric_id,
+                result_metric_name=result_metric_name,
             )
 
         left_value, left_unit = self._single_numeric(left)
@@ -797,8 +2641,18 @@ class DeterministicQueryPlanExecutor:
             self._require_same_unit([left_unit, right_unit], result_name)
         return ExecutionValue(
             kind="scalar",
-            data={"value": function(left_value, right_value)},
+            data={
+                "value": function(left_value, right_value),
+                "left_value": left_value,
+                "right_value": right_value,
+                "operation": result_name,
+            },
             unit=result_unit or left_unit,
+            metadata={
+                "operation": result_name,
+                "metric_id": result_metric_id,
+                "metric_name": result_metric_name,
+            },
         )
 
     def _aligned_record_transform(
@@ -808,36 +2662,50 @@ class DeterministicQueryPlanExecutor:
         function: Callable[[Decimal, Decimal], Decimal],
         result_unit: str | None,
         require_same_unit: bool,
+        cross_metric_alignment: bool = False,
+        result_metric_id: str | None = None,
+        result_metric_name: str | None = None,
     ) -> ExecutionValue:
-        def candidate_key(record: dict[str, Any], include_institution: bool) -> tuple[Any, ...]:
-            base = (record.get("date"), record.get("metric_id"))
-            return (
-                (record.get("institution_id"), *base)
-                if include_institution
-                else base
-            )
+        def unique_map(
+            records: list[dict[str, Any]],
+            fields: tuple[str, ...],
+        ) -> dict[tuple[Any, ...], dict[str, Any]] | None:
+            result: dict[tuple[Any, ...], dict[str, Any]] = {}
+            for record in records:
+                key = tuple(record.get(field) for field in fields)
+                if key in result:
+                    return None
+                result[key] = record
+            return result
 
-        for include_institution in (False, True):
-            left_keys = [candidate_key(item, include_institution) for item in left_records]
-            right_keys = [candidate_key(item, include_institution) for item in right_records]
-            if len(set(left_keys)) != len(left_keys) or len(set(right_keys)) != len(right_keys):
-                continue
-            if set(left_keys) != set(right_keys):
-                continue
-            right_map = dict(zip(right_keys, right_records))
+        def transform_pairs(
+            pairs: list[tuple[dict[str, Any], dict[str, Any]]],
+        ) -> ExecutionValue:
             output: list[dict[str, Any]] = []
-            for key, left_record in zip(left_keys, left_records):
-                right_record = right_map[key]
+            for left_record, right_record in pairs:
                 if require_same_unit:
                     self._require_same_unit(
                         [left_record.get("unit"), right_record.get("unit")],
                         "aligned operation",
                     )
-                current = dict(left_record)
-                current["value"] = function(
-                    self._decimal(left_record.get("value"), "aligned operation"),
-                    self._decimal(right_record.get("value"), "aligned operation"),
+                left_value = self._decimal(
+                    left_record.get("value"),
+                    "aligned operation",
                 )
+                right_value = self._decimal(
+                    right_record.get("value"),
+                    "aligned operation",
+                )
+                current = dict(left_record)
+                if result_metric_id is not None:
+                    current["metric_id"] = result_metric_id
+                if result_metric_name is not None:
+                    current["metric_name"] = result_metric_name
+                current["left_value"] = left_value
+                current["right_value"] = right_value
+                current["left_date"] = left_record.get("date")
+                current["right_date"] = right_record.get("date")
+                current["value"] = function(left_value, right_value)
                 if result_unit is not None:
                     current["unit"] = result_unit
                 output.append(current)
@@ -845,14 +2713,97 @@ class DeterministicQueryPlanExecutor:
                 kind="records",
                 data=output,
                 unit=result_unit or left_records[0].get("unit"),
+                metadata={
+                    "metric_id": result_metric_id,
+                    "metric_name": result_metric_name,
+                },
             )
-        raise QueryExecutionError("两个记录集合无法按机构、日期和指标对齐。")
+
+        exact_fields = ("institution_id", "date", "metric_id")
+        left_exact = unique_map(left_records, exact_fields)
+        right_exact = unique_map(right_records, exact_fields)
+        if (
+            left_exact is not None
+            and right_exact is not None
+            and set(left_exact) == set(right_exact)
+        ):
+            return transform_pairs(
+                [(left_exact[key], right_exact[key]) for key in left_exact]
+            )
+
+        if cross_metric_alignment:
+            cross_metric_fields = (
+                ("institution_id", "date"),
+                ("institution_id", "start_date", "end_date"),
+                ("institution_id",),
+            )
+            for fields in cross_metric_fields:
+                left_map = unique_map(left_records, fields)
+                right_map = unique_map(right_records, fields)
+                if (
+                    left_map is not None
+                    and right_map is not None
+                    and set(left_map) == set(right_map)
+                ):
+                    return transform_pairs(
+                        [
+                            (left_map[key], right_map[key])
+                            for key in left_map
+                        ]
+                    )
+
+        period_fields = ("institution_id", "metric_id")
+        left_period = unique_map(left_records, period_fields)
+        right_period = unique_map(right_records, period_fields)
+        if (
+            left_period is not None
+            and right_period is not None
+            and set(left_period) == set(right_period)
+        ):
+            return transform_pairs(
+                [(left_period[key], right_period[key]) for key in left_period]
+            )
+
+        baseline_fields = ("date", "metric_id")
+        right_baseline = unique_map(right_records, baseline_fields)
+        if right_baseline is not None:
+            pairs = []
+            for left_record in left_records:
+                key = tuple(left_record.get(field) for field in baseline_fields)
+                baseline = right_baseline.get(key)
+                if baseline is None:
+                    pairs = []
+                    break
+                pairs.append((left_record, baseline))
+            if pairs:
+                return transform_pairs(pairs)
+
+        left_baseline = unique_map(left_records, baseline_fields)
+        if left_baseline is not None:
+            pairs = []
+            for right_record in right_records:
+                key = tuple(right_record.get(field) for field in baseline_fields)
+                baseline = left_baseline.get(key)
+                if baseline is None:
+                    pairs = []
+                    break
+                pairs.append((baseline, right_record))
+            if pairs:
+                return transform_pairs(pairs)
+
+        raise QueryExecutionError(
+            "两个记录集合无法按机构、日期或比较期间对齐。"
+        )
 
     @staticmethod
-    def _ratio(numerator: Decimal, denominator: Decimal) -> Decimal:
+    def _quotient(
+        numerator: Decimal,
+        denominator: Decimal,
+        multiplier: Decimal,
+    ) -> Decimal:
         if denominator == 0:
-            raise QueryExecutionError("比例计算分母为0。")
-        return numerator / denominator * Decimal(100)
+            raise QueryExecutionError("除法计算分母为0。")
+        return numerator / denominator * multiplier
 
     @staticmethod
     def _growth(current: Decimal, base: Decimal) -> Decimal:
@@ -968,7 +2919,11 @@ class DeterministicQueryPlanExecutor:
             elif check_type == "date_completeness":
                 self._check_date_completeness(query_plan, source_records, parameters)
             elif check_type == "metric_completeness":
-                self._check_metric_completeness(source_records, parameters)
+                self._check_metric_completeness(
+                    query_plan,
+                    source_records,
+                    parameters,
+                )
             elif check_type in {
                 "denominator_nonzero",
                 "unit_consistency",
@@ -1006,8 +2961,13 @@ class DeterministicQueryPlanExecutor:
         records: list[dict[str, Any]],
         parameters: dict[str, Any],
     ) -> None:
-        expected = parameters.get("institution_ids")
-        if not isinstance(expected, list) or not expected:
+        explicit_expected = parameters.get("institution_ids")
+        has_explicit_scope = (
+            isinstance(explicit_expected, list)
+            and bool(explicit_expected)
+        )
+        expected = explicit_expected
+        if not has_explicit_scope:
             institutions = query_plan.get("institutions")
             population = (
                 institutions.get("comparison_population")
@@ -1021,14 +2981,61 @@ class DeterministicQueryPlanExecutor:
             )
         if not isinstance(expected, list) or not expected:
             expected = [f"ORG{index:03d}" for index in range(1, 14)]
-        expected_set = set(expected)
+        expected_set = {
+            item for item in expected if isinstance(item, str)
+        }
+
+        filtered = list(records)
+        metric_ids = parameters.get("metric_ids")
+        if isinstance(metric_ids, list) and metric_ids:
+            filtered = [
+                item
+                for item in filtered
+                if item.get("metric_id") in metric_ids
+            ]
+        data_date = parameters.get("date")
+        if isinstance(data_date, str):
+            filtered = [
+                item for item in filtered
+                if item.get("date") == data_date
+            ]
+        dates = parameters.get("dates")
+        if isinstance(dates, list) and dates:
+            date_set = set(dates)
+            filtered = [
+                item for item in filtered
+                if item.get("date") in date_set
+            ]
+
         grouped: dict[tuple[Any, Any], set[Any]] = defaultdict(set)
-        for record in records:
+        for record in filtered:
             grouped[(record.get("date"), record.get("metric_id"))].add(
                 record.get("institution_id")
             )
-        if not grouped or any(not expected_set.issubset(actual) for actual in grouped.values()):
-            raise QueryExecutionError("institution_completeness 检查失败。")
+
+        groups_to_check = list(grouped.values())
+        if not has_explicit_scope:
+            groups_to_check = [
+                actual
+                for actual in groups_to_check
+                if len(
+                    {
+                        item for item in actual
+                        if item is not None
+                    }
+                ) > 1
+            ]
+
+        if (
+            not groups_to_check
+            or any(
+                not expected_set.issubset(actual)
+                for actual in groups_to_check
+            )
+        ):
+            raise QueryExecutionError(
+                "institution_completeness 检查失败。"
+            )
 
     def _check_date_completeness(
         self,
@@ -1070,20 +3077,69 @@ class DeterministicQueryPlanExecutor:
 
     @staticmethod
     def _check_metric_completeness(
+        query_plan: dict[str, Any],
         records: list[dict[str, Any]],
         parameters: dict[str, Any],
     ) -> None:
         expected = parameters.get("metric_ids")
         if not isinstance(expected, list) or not expected:
-            raise QueryExecutionError("metric_completeness 缺少 metric_ids。")
+            raise QueryExecutionError(
+                "metric_completeness 缺少 metric_ids。"
+            )
         expected_set = set(expected)
-        grouped: dict[tuple[Any, Any], set[Any]] = defaultdict(set)
-        for record in records:
-            grouped[(record.get("institution_id"), record.get("date"))].add(
+
+        filtered = list(records)
+        data_date = parameters.get("date")
+        if isinstance(data_date, str):
+            filtered = [
+                item for item in filtered
+                if item.get("date") == data_date
+            ]
+        dates = parameters.get("dates")
+        if isinstance(dates, list) and dates:
+            date_set = set(dates)
+            filtered = [
+                item for item in filtered
+                if item.get("date") in date_set
+            ]
+
+        grouped: dict[Any, set[Any]] = defaultdict(set)
+        for record in filtered:
+            grouped[record.get("institution_id")].add(
                 record.get("metric_id")
             )
-        if not grouped or any(not expected_set.issubset(actual) for actual in grouped.values()):
-            raise QueryExecutionError("metric_completeness 检查失败。")
+
+        requested = parameters.get("institution_ids")
+        if isinstance(requested, list) and requested:
+            institutions = requested
+        else:
+            institution_plan = query_plan.get("institutions")
+            targets = (
+                institution_plan.get("targets")
+                if isinstance(institution_plan, dict)
+                else []
+            )
+            target_ids = [
+                item.get("institution_id")
+                for item in targets
+                if isinstance(item, dict)
+                and isinstance(item.get("institution_id"), str)
+            ]
+            institutions = (
+                target_ids
+                if target_ids
+                else [key for key in grouped if key is not None]
+            )
+
+        if not institutions or any(
+            not expected_set.issubset(
+                grouped.get(institution_id, set())
+            )
+            for institution_id in institutions
+        ):
+            raise QueryExecutionError(
+                "metric_completeness 检查失败。"
+            )
 
     @staticmethod
     def _date_range(start_raw: str, end_raw: str) -> list[str]:
@@ -1101,6 +3157,31 @@ class DeterministicQueryPlanExecutor:
             current += timedelta(days=1)
         return result
 
+    def _output_records(
+        self,
+        value: ExecutionValue,
+        output_plan: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        records = self._records(value)
+        target_ids = output_plan.get("_target_institution_ids")
+        if not isinstance(target_ids, list) or not target_ids:
+            return records
+        target_set = {
+            item for item in target_ids if isinstance(item, str)
+        }
+        if not target_set:
+            return records
+        if not any(
+            record.get("institution_id") is not None
+            for record in records
+        ):
+            return records
+        return [
+            record
+            for record in records
+            if record.get("institution_id") in target_set
+        ]
+
     def _render(
         self,
         value: ExecutionValue,
@@ -1116,8 +3197,24 @@ class DeterministicQueryPlanExecutor:
             digits = 2
 
         if value.kind == "records":
-            return self._render_records(self._records(value), digits)
+            return self._render_records(
+                self._output_records(value, output_plan),
+                digits,
+            )
         if value.kind == "scalar":
+            if (
+                value.data.get("operation")
+                in {"difference", "absolute_difference"}
+                and isinstance(value.data.get("left_record"), dict)
+                and isinstance(value.data.get("right_record"), dict)
+            ):
+                labels = output_plan.get("result_fields")
+                labels = labels if isinstance(labels, list) else []
+                return self._render_comparison_composite(
+                    [(0, value)],
+                    labels,
+                    digits,
+                )
             numeric = self._json_number(value.data.get("value"), digits)
             unit = value.unit
             summary = f"计算结果为{numeric}{unit or ''}。"
@@ -1127,7 +3224,30 @@ class DeterministicQueryPlanExecutor:
             return ["date"], [[resolved]], f"基期日期为{resolved}。"
         if value.kind == "count":
             count = int(value.data.get("count", 0))
-            return ["count"], [[count]], f"共{count}条结果。"
+            unit = output_plan.get("unit") or value.unit or "条"
+            population_count = value.data.get("population_count")
+            share_percent = value.data.get("share_percent")
+            if (
+                unit == "天"
+                and isinstance(population_count, int)
+                and population_count > 0
+                and share_percent is not None
+            ):
+                rendered_share = self._json_number(share_percent, 2)
+                return (
+                    ["count", "unit", "population_count", "share_percent"],
+                    [[count, unit, population_count, rendered_share]],
+                    (
+                        f"计数结果为{count}{unit}，"
+                        f"占{population_count}{unit}的"
+                        f"{self._display_number(share_percent, 2)}%。"
+                    ),
+                )
+            return (
+                ["count", "unit"],
+                [[count, unit]],
+                f"计数结果为{count}{unit}。",
+            )
         if value.kind == "assessment":
             data = value.data
             metric_value = self._json_number(data.get("metric_value"), digits)
@@ -1205,40 +3325,477 @@ class DeterministicQueryPlanExecutor:
         digits: int,
     ) -> tuple[list[str], list[list[JsonScalar]], str | None]:
         items: list[ExecutionValue] = value.data.get("items", [])
-        record_items = [item for item in items if item.kind == "records"]
-        count_item = next((item for item in items if item.kind == "count"), None)
-        if len(record_items) == 1:
-            columns, rows, record_summary = self._render_records(
-                self._records(record_items[0]), digits
-            )
-            if count_item is not None:
-                count = int(count_item.data.get("count", 0))
-                return columns, rows, f"共{count}条结果。{record_summary or ''}"
-            return columns, rows, record_summary
-        if len(record_items) > 1:
-            combined_records: list[dict[str, Any]] = []
-            for item in record_items:
-                combined_records.extend(dict(record) for record in self._records(item))
-            return self._render_records(combined_records, digits)
-
         labels = output_plan.get("result_fields")
         labels = labels if isinstance(labels, list) else []
+        if len(labels) != len(items):
+            labels = []
+
+        comparison_items = [
+            (index, item)
+            for index, item in enumerate(items)
+            if item.kind == "scalar"
+            and item.data.get("operation") in {
+                "difference",
+                "absolute_difference",
+            }
+            and isinstance(item.data.get("left_record"), dict)
+            and isinstance(item.data.get("right_record"), dict)
+        ]
+        if comparison_items and len(comparison_items) == len(items):
+            return self._render_comparison_composite(
+                comparison_items,
+                labels,
+                digits,
+            )
+
+        trend_series = [
+            item.data.get("series")
+            for item in items
+            if item.kind == "trend"
+            and isinstance(item.data.get("series"), list)
+        ]
+        effective_items: list[tuple[int, ExecutionValue]] = []
+        for index, item in enumerate(items):
+            if item.kind == "records" and any(
+                item.data == series for series in trend_series
+            ):
+                continue
+            effective_items.append((index, item))
+
+        has_nonempty_record_output = any(
+            item.kind == "records"
+            and bool(self._output_records(item, output_plan))
+            for _, item in effective_items
+        )
+        if has_nonempty_record_output:
+            effective_items = [
+                (index, item)
+                for index, item in effective_items
+                if not (
+                    item.kind == "records"
+                    and not self._output_records(
+                        item,
+                        output_plan,
+                    )
+                )
+            ]
+
+        record_like_items = [
+            (index, item)
+            for index, item in effective_items
+            if item.kind in {"records", "trend"}
+        ]
+        count_items = [
+            (index, item)
+            for index, item in effective_items
+            if item.kind == "count"
+        ]
+
+        if len(record_like_items) == 1 and all(
+            item.kind in {"records", "trend", "count"}
+            for _, item in effective_items
+        ):
+            _, record_item = record_like_items[0]
+            if record_item.kind == "trend":
+                columns, rows, record_summary = self._render(
+                    record_item,
+                    output_plan,
+                )
+            else:
+                columns, rows, record_summary = self._render_records(
+                    self._output_records(record_item, output_plan),
+                    digits,
+                )
+            if count_items:
+                _, count_item = count_items[0]
+                count = int(count_item.data.get("count", 0))
+                unit = count_item.unit or "条"
+                return (
+                    columns,
+                    rows,
+                    f"满足条件的数量为{count}{unit}。{record_summary or ''}",
+                )
+            return columns, rows, record_summary
+
+        scalar_items = [
+            (index, item)
+            for index, item in effective_items
+            if item.kind == "scalar"
+        ]
+
+        simple_numeric_items = bool(effective_items) and all(
+            item.kind == "scalar"
+            or (
+                item.kind == "records"
+                and len(self._records(item)) == 1
+                and self._records(item)[0].get("rank") is None
+                and self._records(item)[0].get("result_type") is None
+                and self._records(item)[0].get("trend") is None
+            )
+            for _, item in effective_items
+        )
+        if simple_numeric_items and len(effective_items) >= 2:
+            rows: list[list[JsonScalar]] = []
+            summary_parts: list[str] = []
+            for index, item in effective_items:
+                provided_label = (
+                    str(labels[index])
+                    if index < len(labels)
+                    else None
+                )
+                raw_label = self._composite_label(
+                    item,
+                    provided_label,
+                    index,
+                )
+                if item.kind == "records":
+                    record = self._records(item)[0]
+                    metric_name = str(
+                        record.get("metric_name")
+                        or raw_label
+                    )
+                    numeric = self._decimal(
+                        record.get("value"),
+                        "composite record",
+                    )
+                    unit = str(record.get("unit") or item.unit or "")
+                    friendly_label = self._friendly_result_label(
+                        raw_label,
+                        metric_name,
+                    )
+                else:
+                    metric_name = raw_label
+                    numeric = self._decimal(
+                        item.data.get("value"),
+                        "composite scalar",
+                    )
+                    unit = str(item.unit or "")
+                    friendly_label = self._friendly_result_label(
+                        raw_label,
+                        None,
+                    )
+
+                rows.append(
+                    [
+                        raw_label,
+                        friendly_label,
+                        self._json_number(numeric, digits),
+                        unit,
+                    ]
+                )
+                if raw_label in {"mom_change", "yoy_change"}:
+                    if numeric > 0:
+                        direction = "增长"
+                    elif numeric < 0:
+                        direction = "下降"
+                    else:
+                        direction = "保持不变"
+                    summary_parts.append(
+                        f"{friendly_label}{direction}"
+                        + (
+                            ""
+                            if numeric == 0
+                            else self._display_number(
+                                abs(numeric),
+                                digits,
+                            )
+                            + unit
+                        )
+                    )
+                else:
+                    summary_parts.append(
+                        f"{friendly_label}为"
+                        f"{self._display_number(numeric, digits)}"
+                        f"{unit}"
+                    )
+            return (
+                ["result", "label", "value", "unit"],
+                rows,
+                "；".join(summary_parts) + "。",
+            )
+
+        if (
+            len(record_like_items) == 1
+            and scalar_items
+            and all(
+                item.kind in {"records", "scalar"}
+                for _, item in effective_items
+            )
+        ):
+            record_index, record_item = record_like_items[0]
+            records = self._output_records(
+                record_item,
+                output_plan,
+            )
+            if len(records) == 1:
+                rows: list[list[JsonScalar]] = []
+                summary_parts: list[str] = []
+                for index, item in effective_items:
+                    provided_label = (
+                        str(labels[index])
+                        if index < len(labels)
+                        else None
+                    )
+                    label = self._composite_label(
+                        item,
+                        provided_label,
+                        index,
+                    )
+                    friendly_label = {
+                        "current_value": "当前值",
+                        "mom_change": "环比",
+                        "yoy_change": "同比",
+                    }.get(label, label)
+                    if item.kind == "records":
+                        # `records` has already been reduced to the requested
+                        # institution by _output_records above.  Reading the
+                        # original item here would silently pick the first
+                        # province-wide ranking row instead of the target.
+                        record = records[0]
+                        value_number = self._json_number(
+                            record.get("value"),
+                            digits,
+                        )
+                        unit = str(record.get("unit") or item.unit or "")
+                        rows.append([label, value_number, unit])
+                        summary_parts.append(
+                            f"{friendly_label}为"
+                            f"{self._display_number(record.get('value'), digits)}"
+                            f"{unit}"
+                        )
+                    else:
+                        numeric = self._decimal(
+                            item.data.get("value"),
+                            "composite scalar",
+                        )
+                        value_number = self._json_number(numeric, digits)
+                        unit = item.unit or ""
+                        rows.append([label, value_number, unit])
+                        if label in {"mom_change", "yoy_change"}:
+                            if numeric > 0:
+                                direction = "增长"
+                            elif numeric < 0:
+                                direction = "下降"
+                            else:
+                                direction = "保持不变"
+                            summary_parts.append(
+                                f"{friendly_label}{direction}"
+                                + (
+                                    ""
+                                    if numeric == 0
+                                    else self._display_number(
+                                        abs(numeric),
+                                        digits,
+                                    )
+                                    + unit
+                                )
+                            )
+                        else:
+                            summary_parts.append(
+                                f"{friendly_label}为"
+                                f"{self._display_number(numeric, digits)}"
+                                f"{unit}"
+                            )
+                return (
+                    ["result", "value", "unit"],
+                    rows,
+                    "；".join(summary_parts) + "。",
+                )
+
+        if record_like_items:
+            rendered_groups: list[
+                tuple[str, list[str], list[list[JsonScalar]], str | None]
+            ] = []
+            union_columns: list[str] = []
+            summary_parts: list[str] = []
+
+            for index, item in record_like_items:
+                provided_label = (
+                    str(labels[index])
+                    if index < len(labels)
+                    else None
+                )
+                label = self._composite_label(
+                    item,
+                    provided_label,
+                    index,
+                )
+                if item.kind == "trend":
+                    columns, rows, summary = self._render(
+                        item,
+                        output_plan,
+                    )
+                else:
+                    columns, rows, summary = self._render_records(
+                        self._output_records(item, output_plan),
+                        digits,
+                    )
+                for column in columns:
+                    if (
+                        column != "result"
+                        and column not in union_columns
+                    ):
+                        union_columns.append(column)
+                rendered_groups.append(
+                    (label, columns, rows, summary)
+                )
+                if summary:
+                    cleaned_summary = summary.rstrip("。；")
+                    if cleaned_summary.startswith(label):
+                        summary_parts.append(cleaned_summary)
+                    else:
+                        summary_parts.append(
+                            f"{label}：{cleaned_summary}"
+                        )
+
+            if scalar_items:
+                for column in (
+                    "metric_id",
+                    "metric_name",
+                    "metric_value",
+                    "unit",
+                ):
+                    if column not in union_columns:
+                        union_columns.append(column)
+
+            composite_rows: list[list[JsonScalar]] = []
+            for label, columns, rows, _ in rendered_groups:
+                for row in rows:
+                    row_map = dict(zip(columns, row))
+                    composite_rows.append(
+                        [
+                            label,
+                            *[
+                                row_map.get(column)
+                                for column in union_columns
+                            ],
+                        ]
+                    )
+
+            for index, item in scalar_items:
+                provided_label = (
+                    str(labels[index])
+                    if index < len(labels)
+                    else None
+                )
+                label = self._composite_label(
+                    item,
+                    provided_label,
+                    index,
+                )
+                numeric = self._decimal(
+                    item.data.get("value"),
+                    "composite scalar",
+                )
+                metric_name = (
+                    item.metadata.get("metric_name")
+                    if isinstance(
+                        item.metadata.get("metric_name"),
+                        str,
+                    )
+                    else label
+                )
+                row_map = {
+                    "metric_id": item.metadata.get("metric_id"),
+                    "metric_name": metric_name,
+                    "metric_value": self._json_number(
+                        numeric,
+                        digits,
+                    ),
+                    "unit": item.unit,
+                }
+                composite_rows.append(
+                    [
+                        label,
+                        *[
+                            row_map.get(column)
+                            for column in union_columns
+                        ],
+                    ]
+                )
+                if item.data.get("operation") in {
+                    "difference",
+                    "absolute_difference",
+                    "percentage_point_change",
+                }:
+                    direction = self._change_direction(numeric)
+                    summary_parts.append(
+                        f"{label}{direction}"
+                        + (
+                            ""
+                            if numeric == 0
+                            else self._display_number(
+                                abs(numeric),
+                                digits,
+                            )
+                            + str(item.unit or "")
+                        )
+                    )
+                else:
+                    summary_parts.append(
+                        f"{label}为"
+                        f"{self._display_number(numeric, digits)}"
+                        f"{item.unit or ''}"
+                    )
+
+            for index, item in count_items:
+                provided_label = (
+                    str(labels[index])
+                    if index < len(labels)
+                    else None
+                )
+                label = self._composite_label(
+                    item,
+                    provided_label,
+                    index,
+                )
+                count = int(item.data.get("count", 0))
+                unit = item.unit or "条"
+                summary_parts.append(f"{label}为{count}{unit}")
+
+            summary = (
+                "；".join(summary_parts) + "。"
+                if summary_parts
+                else None
+            )
+            return (
+                ["result", *union_columns],
+                composite_rows,
+                summary,
+            )
+
         rows: list[list[JsonScalar]] = []
         summary_parts: list[str] = []
-        for index, item in enumerate(items):
-            label = str(labels[index]) if index < len(labels) else f"result_{index + 1}"
+        for index, item in effective_items:
+            provided_label = (
+                str(labels[index])
+                if index < len(labels)
+                else None
+            )
+            label = self._composite_label(
+                item,
+                provided_label,
+                index,
+            )
             if item.kind == "scalar":
-                rendered = self._json_number(item.data.get("value"), digits)
+                rendered = self._json_number(
+                    item.data.get("value"),
+                    digits,
+                )
                 rows.append([label, rendered, item.unit])
-                summary_parts.append(f"{label}为{rendered}{item.unit or ''}")
+                summary_parts.append(
+                    f"{label}为{self._display_number(item.data.get('value'), digits)}"
+                    f"{item.unit or ''}"
+                )
             elif item.kind == "date":
                 rendered = item.data.get("date")
                 rows.append([label, rendered, None])
                 summary_parts.append(f"{label}为{rendered}")
             elif item.kind == "count":
                 rendered = int(item.data.get("count", 0))
-                rows.append([label, rendered, None])
-                summary_parts.append(f"{label}为{rendered}")
+                unit = item.unit or "条"
+                rows.append([label, rendered, unit])
+                summary_parts.append(f"{label}为{rendered}{unit}")
             else:
                 rendered = json.dumps(
                     self._jsonable(item.data, digits),
@@ -1247,7 +3804,222 @@ class DeterministicQueryPlanExecutor:
                 )
                 rows.append([label, rendered, item.unit])
                 summary_parts.append(f"{label}已生成")
-        return ["result", "value", "unit"], rows, "；".join(summary_parts) + "。"
+        return (
+            ["result", "value", "unit"],
+            rows,
+            "；".join(summary_parts) + "。",
+        )
+
+    def _render_comparison_composite(
+        self,
+        comparison_items: list[tuple[int, ExecutionValue]],
+        labels: list[Any],
+        digits: int,
+    ) -> tuple[list[str], list[list[JsonScalar]], str | None]:
+        columns = [
+            "result",
+            "metric_name",
+            "base_date",
+            "base_value",
+            "current_date",
+            "current_value",
+            "change",
+            "direction",
+            "unit",
+        ]
+        rows: list[list[JsonScalar]] = []
+        summaries: list[str] = []
+
+        for index, item in comparison_items:
+            left_record = item.data["left_record"]
+            right_record = item.data["right_record"]
+            current_value = item.data.get("left_value")
+            base_value = item.data.get("right_value")
+            change = item.data.get("value")
+            unit = item.unit or left_record.get("unit") or right_record.get("unit")
+            metric_name = (
+                left_record.get("metric_name")
+                or right_record.get("metric_name")
+                or (
+                    str(labels[index])
+                    if index < len(labels)
+                    else f"result_{index + 1}"
+                )
+            )
+            direction = self._change_direction(change)
+            label = (
+                str(labels[index])
+                if index < len(labels)
+                else str(metric_name)
+            )
+            rows.append(
+                [
+                    label,
+                    metric_name,
+                    right_record.get("date"),
+                    self._json_number(base_value, digits),
+                    left_record.get("date"),
+                    self._json_number(current_value, digits),
+                    self._json_number(change, digits),
+                    direction,
+                    unit,
+                ]
+            )
+            summaries.append(
+                f"{metric_name}："
+                f"{self._display_number(base_value, digits)}{unit or ''}"
+                f"→{self._display_number(current_value, digits)}{unit or ''}，"
+                f"{direction}"
+                + (
+                    ""
+                    if direction == "保持不变"
+                    else f"{self._display_number(abs(self._decimal(change, 'change')), digits)}"
+                    f"{unit or ''}"
+                )
+            )
+
+        return columns, rows, "；".join(summaries) + "。"
+
+    @staticmethod
+    def _change_direction(value: object) -> str:
+        numeric = Decimal(str(value))
+        if numeric > 0:
+            return "增加"
+        if numeric < 0:
+            return "减少"
+        return "保持不变"
+
+    @staticmethod
+    def _friendly_result_label(
+        raw_label: str,
+        metric_name: str | None,
+    ) -> str:
+        mapping = {
+            "current_value": "当前值",
+            "mom_change": "环比",
+            "yoy_change": "同比",
+            "corp_customers": "对公客户数",
+            "corporate_customers": "对公客户数",
+            "personal_customers": "个人客户数",
+            "total_customers": "合计客户数",
+            "corporate_loan_ratio": "对公贷款占比",
+            "duigong_loan_ratio": "对公贷款占比",
+            "personal_loan_ratio": "个人贷款占比",
+            "geren_loan_ratio": "个人贷款占比",
+            "npl_rate": "不良贷款率",
+            "provision_coverage": "拨备覆盖率",
+            "net_profit_change": "净利润较年初变化",
+            "cost_income_ratio_change": "成本收入比较年初变化",
+            "net_interest_income_change": "净利息收入较年初变化",
+            "intermediate_income_change": "中间业务收入较年初变化",
+            "net_interest_ratio_current": "净利息收入占营业收入比重",
+            "intermediate_income_ratio_current": "中间业务收入占营业收入比重",
+            "intermediate_ratio_current": "中间业务收入占营业收入比重",
+            "ldr": "存贷比",
+            "ldr_value": "存贷比",
+        }
+        if raw_label in mapping:
+            return mapping[raw_label]
+        if metric_name:
+            if "change" in raw_label:
+                return f"{metric_name}较基期变化"
+            return metric_name
+        return raw_label
+
+    @staticmethod
+    def _composite_label(
+        item: ExecutionValue,
+        provided_label: str | None,
+        index: int,
+    ) -> str:
+        generic_labels = {
+            None,
+            "",
+            "date",
+            "value",
+            "trend",
+            "institution",
+            "metric_value",
+            "result",
+        }
+        result_type = item.metadata.get("result_type")
+        if result_type is None and item.kind == "records" and item.data:
+            result_type = item.data[0].get("result_type")
+        if result_type == "maximum":
+            return "最高值"
+        if result_type == "minimum":
+            return "最低值"
+        if item.kind == "trend":
+            return "时间序列与趋势"
+        if item.kind == "count":
+            return "数量"
+
+        output_ref = item.metadata.get("output_ref")
+        candidate = (
+            str(provided_label)
+            if provided_label not in generic_labels
+            else str(output_ref)
+            if isinstance(output_ref, str) and output_ref
+            else ""
+        )
+
+        metric_name = (
+            item.metadata.get("metric_name")
+            if isinstance(item.metadata.get("metric_name"), str)
+            else None
+        )
+        if metric_name is None and item.kind == "records":
+            names = {
+                str(record.get("metric_name"))
+                for record in item.data
+                if isinstance(record, dict)
+                and isinstance(record.get("metric_name"), str)
+            }
+            if len(names) == 1:
+                metric_name = next(iter(names))
+
+        if metric_name:
+            lowered = candidate.lower()
+            if candidate in {
+                "current_value",
+                "mom_change",
+                "yoy_change",
+            }:
+                return candidate
+            if any(token in lowered for token in ("top3", "best")):
+                return f"{metric_name}表现较好"
+            if any(token in lowered for token in ("bottom4", "worst")):
+                return f"{metric_name}表现较差"
+            if "rank" in lowered or "perf" in lowered:
+                return f"{metric_name}排名"
+            if "change" in lowered:
+                return f"{metric_name}较基期变化"
+            return metric_name
+
+        mapping = {
+            "net_profit_change": "净利润较年初变化",
+            "cost_income_ratio_change": "成本收入比较年初变化",
+            "net_interest_income_change": "净利息收入较年初变化",
+            "intermediate_income_change": "中间业务收入较年初变化",
+            "ldr": "存贷比",
+            "ldr_value": "存贷比",
+        }
+        if candidate in mapping:
+            return mapping[candidate]
+        if candidate:
+            return candidate
+        if item.kind == "records":
+            return "明细"
+        return f"结果{index + 1}"
+
+    @staticmethod
+    def _display_number(value: object, digits: int) -> str:
+        numeric = Decimal(str(value))
+        quantizer = Decimal(1).scaleb(-digits)
+        return format(
+            numeric.quantize(quantizer, rounding=ROUND_HALF_UP),
+            f".{digits}f",
+        )
 
     def _render_records(
         self,
@@ -1255,6 +4027,7 @@ class DeterministicQueryPlanExecutor:
         digits: int,
     ) -> tuple[list[str], list[list[JsonScalar]], str | None]:
         fields = [
+            ("result_type", "result_type"),
             ("institution_id", "institution_id"),
             ("institution_name", "institution_name"),
             ("date", "date"),
@@ -1289,11 +4062,25 @@ class DeterministicQueryPlanExecutor:
         for record in records[:20]:
             name = record.get("institution_name") or record.get("institution_id") or ""
             data_date = record.get("date") or ""
-            value = self._json_number(record.get("value"), digits)
+            display_value = self._display_number(
+                record.get("value"),
+                digits,
+            )
             unit = record.get("unit") or ""
             rank = f"，第{record['rank']}名" if record.get("rank") is not None else ""
             prefix = "".join(part for part in (str(name), str(data_date)) if part)
-            summary_parts.append(f"{prefix}：{value}{unit}{rank}")
+            result_type = record.get("result_type")
+            role = (
+                "最高值"
+                if result_type == "maximum"
+                else "最低值"
+                if result_type == "minimum"
+                else ""
+            )
+            role_prefix = f"{role}：" if role else ""
+            summary_parts.append(
+                f"{role_prefix}{prefix}：{display_value}{unit}{rank}"
+            )
         summary = "；".join(summary_parts) + "。"
         if len(records) > 20:
             summary += f"共{len(records)}条记录，摘要仅展示前20条。"
