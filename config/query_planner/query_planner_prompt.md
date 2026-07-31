@@ -95,7 +95,7 @@ status.code 不是 executable 时，operations 和 checks 必须为空数组。d
 3. output_ref 在同一计划内必须唯一，建议使用英文 snake_case。
 4. OP001用于读取一个正式基础指标。input_refs必须严格包含一个正式ZB指标编号，不得为空，也不得把指标编号改写到parameters.metric_id。单机构读取时，parameters使用institution_id并填写正式ORG编号；全省或多机构集合读取时，parameters使用institution_ids数组并完整列出正式ORG编号，不得使用institution_id="all"、"全省"或其他非正式占位符。时间参数必须明确：单点使用date，连续区间使用start_date和end_date，离散序列使用dates。
 5. OP002用于同单位求和。
-6. OP003用于定向差值，input_refs按实际减法顺序排列，或在parameters中明确direction。执行器会在OP003结果中保留本期值、基期值和差额；多个指标变化时，将各OP003结果交给OP019即可，不得只返回差额而丢失双方原始值。“变动了多少／变化了多少／增加多少／减少多少”默认要求绝对差额，即使题目同时出现同比、较去年同期、环比或较上季，也应使用OP003；只有明确出现“增幅、增长率、变化率、变化了百分之多少”或要求“环比和同比变化情况”时才使用OP007。
+6. OP003用于定向差值，input_refs按实际减法顺序排列，或在parameters中明确direction。执行器会在OP003结果中保留本期值、基期值和差额；多个指标变化时，将各OP003结果交给OP019即可，不得只返回差额而丢失双方原始值。“变动了多少／变化了多少／增加多少／减少多少”默认要求绝对差额；但同一问题同时要求环比和同比时，按环比与同比复合规则分别使用两个OP007。除此之外，只有明确出现“增幅、增长率、变化率、变化了百分之多少”或要求“环比和同比变化情况”时才使用OP007。
 7. OP004用于绝对差值。
 8. OP005用于总量与分项核对。它基于未舍入值返回 total_value、component_sum、difference 和 is_equal，并加入 unit_consistency 与 unrounded_comparison。
 9. OP006用于确定性除法。input_refs必须严格包含两个引用，顺序为[分子, 分母]，parameters必须包含numerator和denominator，并加入denominator_nonzero。百分比计算设置multiplier=100、result_unit=%；普通商值设置multiplier=1并填写实际result_unit。例如“网点平均存款规模”必须先用OP020将亿元换算为万元，再用OP006除以网点数量，设置multiplier=1、result_unit=万元/网点。
