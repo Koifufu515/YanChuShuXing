@@ -57,6 +57,10 @@ def normalize_query_plan(
             normalized,
             question,
         )
+        _normalize_default_performance_ranking_plan(
+            normalized,
+            question,
+        )
         _complete_scalar_extreme_operator(
             normalized,
             question,
@@ -182,6 +186,95 @@ def normalize_query_plan(
     for step, operation in enumerate(operations, start=1):
         operation["step"] = step
     return normalized
+
+
+def _normalize_default_performance_ranking_plan(
+    plan: dict[str, Any],
+    question: str,
+) -> None:
+    status = plan.get("status")
+    if (
+        not isinstance(status, dict)
+        or status.get("code") != "executable"
+    ):
+        return
+
+    asks_ranking = any(
+        phrase in question
+        for phrase in (
+            "排名",
+            "名次",
+            "排第几",
+            "第几名",
+            "排第一",
+            "第一名",
+            "排最后",
+            "最后一名",
+        )
+    )
+    if not asks_ranking:
+        return
+
+    explicit_numeric_ranking = any(
+        phrase in question
+        for phrase in (
+            "按数值",
+            "数值排名",
+            "从高到低",
+            "由高到低",
+            "降序",
+            "从低到高",
+            "由低到高",
+            "升序",
+        )
+    )
+    if explicit_numeric_ranking:
+        return
+
+    metrics = plan.get("metrics")
+    requested_metric_ids = (
+        metrics.get("requested_metric_ids")
+        if isinstance(metrics, dict)
+        else None
+    )
+    if (
+        not isinstance(requested_metric_ids, list)
+        or len(requested_metric_ids) != 1
+    ):
+        return
+
+    metric_id = requested_metric_ids[0]
+    performance_direction = (
+        _MAIN_METRIC_DIRECTIONS.get(
+            metric_id
+        )
+    )
+    if performance_direction is None:
+        return
+
+    operations = plan.get("operations")
+    if (
+        not isinstance(operations, list)
+        or not all(
+            isinstance(operation, dict)
+            for operation in operations
+        )
+    ):
+        return
+
+    for operation in operations:
+        if operation.get(
+            "operator_id"
+        ) != "OP011":
+            continue
+
+        operation["operator_id"] = "OP012"
+        operation["parameters"] = {
+            "metric_id": metric_id,
+            "performance_direction": (
+                performance_direction
+            ),
+        }
 
 
 def _normalize_period_average_ranking_plan(
