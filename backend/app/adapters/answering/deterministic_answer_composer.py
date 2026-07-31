@@ -250,6 +250,9 @@ class DeterministicAnswerComposer:
             if len(population_sizes) == 1
             else "对应比较范围"
         )
+        period_text = (
+            self._ranking_period_text(facts)
+        )
 
         if facts.selection_mode == "target":
             institution_names = {
@@ -303,8 +306,7 @@ class DeterministicAnswerComposer:
                 )
 
             summary = (
-                f"截至 "
-                f"{self._display_period(facts.period)}，"
+                f"{period_text}"
                 f"{subject}在{population_text}中，"
                 + "、".join(ranking_parts)
                 + "。"
@@ -344,8 +346,7 @@ class DeterministicAnswerComposer:
 
             summary_parts = [
                 (
-                    f"截至 "
-                    f"{self._display_period(facts.period)}，"
+                    f"{period_text}"
                     f"本次列示{population_text}中"
                     f"排名{direction_text}"
                     f"{facts.requested_n}的结果。"
@@ -396,8 +397,7 @@ class DeterministicAnswerComposer:
                 )
 
             summary = (
-                f"截至 "
-                f"{self._display_period(facts.period)}，"
+                f"{period_text}"
                 f"本次列示{population_text}的"
                 f"{len(facts.rankings)}项指标"
                 "完整排名。"
@@ -517,6 +517,27 @@ class DeterministicAnswerComposer:
                 rows=table_rows,
             ),
             chart_spec=chart_spec,
+        )
+
+    def _ranking_period_text(
+        self,
+        facts: RankingOverviewFacts,
+    ) -> str:
+        if (
+            facts.period_start is not None
+            and facts.period_end is not None
+        ):
+            return (
+                f"在 "
+                f"{self._display_period(facts.period_start)}"
+                f"至"
+                f"{self._display_period(facts.period_end)}"
+                "期间，"
+            )
+
+        return (
+            f"截至 "
+            f"{self._display_period(facts.period)}，"
         )
 
     @staticmethod

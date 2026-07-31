@@ -98,6 +98,8 @@ class RankingOverviewFacts:
     rankings: list[MetricRankingFacts]
     selection_mode: str
     requested_n: int | None = None
+    period_start: str | None = None
+    period_end: str | None = None
     answer_type: str = "ranking"
 
 

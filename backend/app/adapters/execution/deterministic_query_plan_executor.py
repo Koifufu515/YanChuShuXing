@@ -34,6 +34,22 @@ from app.application.models import JsonScalar, QueryPlanExecutionResult
 from app.ports.database_executor import DatabaseExecutor
 
 
+_PERIOD_AVERAGE_FACT_METRICS = {
+    "ZB031": {
+        "source_metric_id": "ZB001",
+        "metric_name": "日均存款余额",
+    },
+    "ZB032": {
+        "source_metric_id": "ZB002",
+        "metric_name": "日均贷款余额",
+    },
+    "ZB033": {
+        "source_metric_id": "ZB011",
+        "metric_name": "日均净利润",
+    },
+}
+
+
 @dataclass
 class ExecutionValue:
     kind: str
@@ -819,6 +835,40 @@ class DeterministicQueryPlanExecutor:
             if isinstance(metric_id, str)
         ]
 
+        source_metric_ids = (
+            metrics_plan.get(
+                "source_metric_ids"
+            )
+            if isinstance(metrics_plan, dict)
+            else []
+        )
+        source_metric_ids = [
+            metric_id
+            for metric_id in source_metric_ids
+            if isinstance(metric_id, str)
+        ]
+
+        period_average_spec = None
+        if len(requested_metric_ids) == 1:
+            candidate = (
+                _PERIOD_AVERAGE_FACT_METRICS.get(
+                    requested_metric_ids[0]
+                )
+            )
+            if (
+                candidate is not None
+                and candidate[
+                    "source_metric_id"
+                ]
+                in source_metric_ids
+            ):
+                period_average_spec = {
+                    **candidate,
+                    "derived_metric_id": (
+                        requested_metric_ids[0]
+                    ),
+                }
+
         grouped: dict[
             str,
             dict[str, Any],
@@ -826,7 +876,9 @@ class DeterministicQueryPlanExecutor:
 
         take_directions: set[str] = set()
         take_sizes: set[int] = set()
-        all_dates: set[str] = set()
+        all_periods: set[
+            tuple[str, str]
+        ] = set()
 
         for (
             selected_ref,
@@ -919,55 +971,121 @@ class DeterministicQueryPlanExecutor:
                 take_directions.add(direction)
                 take_sizes.add(n)
 
+            def record_period(
+                record: dict[str, Any],
+            ) -> tuple[str, str] | None:
+                data_date = record.get("date")
+                if isinstance(data_date, str):
+                    return (
+                        data_date,
+                        data_date,
+                    )
+
+                start_date = record.get(
+                    "start_date"
+                )
+                end_date = record.get(
+                    "end_date"
+                )
+                if (
+                    isinstance(start_date, str)
+                    and isinstance(end_date, str)
+                ):
+                    return (
+                        start_date,
+                        end_date,
+                    )
+
+                return None
+
+            def fact_metric_id(
+                record: dict[str, Any],
+            ) -> str | None:
+                metric_id = record.get(
+                    "metric_id"
+                )
+                if not isinstance(metric_id, str):
+                    return None
+
+                if (
+                    period_average_spec is not None
+                    and record.get("date") is None
+                    and metric_id
+                    == period_average_spec[
+                        "source_metric_id"
+                    ]
+                ):
+                    return period_average_spec[
+                        "derived_metric_id"
+                    ]
+
+                return metric_id
+
             full_groups: dict[
-                tuple[str, str],
+                tuple[
+                    tuple[str, str],
+                    str,
+                ],
                 list[dict[str, Any]],
             ] = defaultdict(list)
 
             for record in ranked_records:
-                metric_id = record.get("metric_id")
-                data_date = record.get("date")
+                metric_id = fact_metric_id(
+                    record
+                )
+                period_key = record_period(
+                    record
+                )
 
                 if (
-                    not isinstance(metric_id, str)
-                    or not isinstance(data_date, str)
+                    metric_id is None
+                    or period_key is None
                 ):
                     return None
 
                 full_groups[
-                    (data_date, metric_id)
+                    (period_key, metric_id)
                 ].append(record)
 
             selected_groups: dict[
-                tuple[str, str],
+                tuple[
+                    tuple[str, str],
+                    str,
+                ],
                 list[dict[str, Any]],
             ] = defaultdict(list)
 
             for record in selected_records:
-                metric_id = record.get("metric_id")
-                data_date = record.get("date")
+                metric_id = fact_metric_id(
+                    record
+                )
+                period_key = record_period(
+                    record
+                )
 
                 if (
-                    not isinstance(metric_id, str)
-                    or not isinstance(data_date, str)
+                    metric_id is None
+                    or period_key is None
                 ):
                     return None
 
                 selected_groups[
-                    (data_date, metric_id)
+                    (period_key, metric_id)
                 ].append(record)
 
             for (
-                data_date,
+                period_key,
                 metric_id,
-            ), selected_group in selected_groups.items():
+            ), selected_group in (
+                selected_groups.items()
+            ):
                 full_group = full_groups.get(
-                    (data_date, metric_id)
+                    (period_key, metric_id)
                 )
                 if not full_group:
                     return None
 
-                all_dates.add(data_date)
+                all_periods.add(period_key)
 
                 metric_names = {
                     item.get("metric_name")
@@ -984,9 +1102,23 @@ class DeterministicQueryPlanExecutor:
                 ):
                     return None
 
-                metric_name = next(
-                    iter(metric_names)
-                )
+                if (
+                    period_average_spec is not None
+                    and metric_id
+                    == period_average_spec[
+                        "derived_metric_id"
+                    ]
+                ):
+                    metric_name = (
+                        period_average_spec[
+                            "metric_name"
+                        ]
+                    )
+                else:
+                    metric_name = next(
+                        iter(metric_names)
+                    )
+
                 unit = next(iter(units))
 
                 if (
@@ -1089,10 +1221,16 @@ class DeterministicQueryPlanExecutor:
 
                     items[institution_id] = current
 
-        if not grouped or len(all_dates) != 1:
+        if (
+            not grouped
+            or len(all_periods) != 1
+        ):
             return None
 
-        period = next(iter(all_dates))
+        period_start, period_end = next(
+            iter(all_periods)
+        )
+        period = period_end
 
         population_sizes = {
             int(group["population_size"])
@@ -1243,6 +1381,16 @@ class DeterministicQueryPlanExecutor:
             rankings=rankings,
             selection_mode=selection_mode,
             requested_n=requested_n,
+            period_start=(
+                period_start
+                if period_start != period_end
+                else None
+            ),
+            period_end=(
+                period_end
+                if period_start != period_end
+                else None
+            ),
         )
 
     @staticmethod

@@ -244,9 +244,74 @@ class BusinessConceptPlanNormalizationTest(unittest.TestCase):
 
     def test_other_concept_combinations_are_unchanged(self):
         plan = self._plan()
-        plan["metrics"]["concept_ids"] = ["BC001", "BC002"]
+        plan["metrics"]["concept_ids"] = [
+            "BC001",
+            "BC002",
+        ]
         original = copy.deepcopy(plan)
-        self.assertEqual(normalize_query_plan(plan), original)
+
+        normalized = normalize_query_plan(plan)
+
+        self.assertEqual(
+            normalized["status"],
+            original["status"],
+        )
+        self.assertEqual(
+            normalized["institutions"],
+            original["institutions"],
+        )
+        self.assertEqual(
+            normalized["metrics"],
+            original["metrics"],
+        )
+        self.assertEqual(
+            normalized["time"],
+            original["time"],
+        )
+        self.assertEqual(
+            normalized["operations"],
+            original["operations"],
+        )
+        self.assertEqual(
+            normalized["output"],
+            original["output"],
+        )
+
+        metric_completeness_checks = [
+            check
+            for check in normalized["checks"]
+            if (
+                isinstance(check, dict)
+                and check.get("type")
+                == "metric_completeness"
+            )
+        ]
+        other_checks = [
+            check
+            for check in normalized["checks"]
+            if not (
+                isinstance(check, dict)
+                and check.get("type")
+                == "metric_completeness"
+            )
+        ]
+
+        self.assertEqual(
+            other_checks,
+            original["checks"],
+        )
+        self.assertEqual(
+            len(metric_completeness_checks),
+            1,
+        )
+        self.assertEqual(
+            metric_completeness_checks[0][
+                "parameters"
+            ]["metric_ids"],
+            original["metrics"][
+                "source_metric_ids"
+            ],
+        )
 
     def test_planner_validates_the_normalized_plan(self):
         planner = LLMQueryPlanner(

@@ -17,6 +17,33 @@ _MAIN_METRIC_DIRECTIONS = {
 }
 _MAIN_METRICS = (*_MAIN_METRIC_DIRECTIONS, "ZB022")
 
+_PERIOD_AVERAGE_METRICS = {
+    "ZB031": {
+        "source_metric_id": "ZB001",
+        "metric_name": "日均存款余额",
+        "unit": "亿元",
+        "performance_direction": (
+            "higher_is_better"
+        ),
+    },
+    "ZB032": {
+        "source_metric_id": "ZB002",
+        "metric_name": "日均贷款余额",
+        "unit": "亿元",
+        "performance_direction": (
+            "higher_is_better"
+        ),
+    },
+    "ZB033": {
+        "source_metric_id": "ZB011",
+        "metric_name": "日均净利润",
+        "unit": "万元",
+        "performance_direction": (
+            "higher_is_better"
+        ),
+    },
+}
+
 
 def normalize_query_plan(
     plan: dict[str, Any],
@@ -26,6 +53,10 @@ def normalize_query_plan(
     normalized = deepcopy(plan)
     _complete_metric_completeness_check(normalized)
     if isinstance(question, str):
+        _normalize_period_average_ranking_plan(
+            normalized,
+            question,
+        )
         _complete_scalar_extreme_operator(
             normalized,
             question,
@@ -151,6 +182,294 @@ def normalize_query_plan(
     for step, operation in enumerate(operations, start=1):
         operation["step"] = step
     return normalized
+
+
+def _normalize_period_average_ranking_plan(
+    plan: dict[str, Any],
+    question: str,
+) -> None:
+    status = plan.get("status")
+    if (
+        not isinstance(status, dict)
+        or status.get("code") != "executable"
+    ):
+        return
+
+    if not any(
+        phrase in question
+        for phrase in (
+            "排名",
+            "前3",
+            "前三",
+            "后3",
+            "后三",
+            "前五",
+            "后五",
+            "前十",
+            "后十",
+            "排第几",
+        )
+    ):
+        return
+
+    metrics = plan.get("metrics")
+    if not isinstance(metrics, dict):
+        return
+
+    requested_metric_ids = metrics.get(
+        "requested_metric_ids"
+    )
+    if (
+        not isinstance(requested_metric_ids, list)
+        or len(requested_metric_ids) != 1
+    ):
+        return
+
+    derived_metric_id = requested_metric_ids[0]
+    specification = (
+        _PERIOD_AVERAGE_METRICS.get(
+            derived_metric_id
+        )
+    )
+    if specification is None:
+        return
+
+    time_plan = plan.get("time")
+    if not isinstance(time_plan, dict):
+        return
+
+    start_date = time_plan.get("start_date")
+    end_date = time_plan.get("end_date")
+    if (
+        time_plan.get("mode") != "range"
+        or not isinstance(start_date, str)
+        or not isinstance(end_date, str)
+    ):
+        return
+
+    operations = plan.get("operations")
+    if (
+        not isinstance(operations, list)
+        or not operations
+        or not all(
+            isinstance(operation, dict)
+            for operation in operations
+        )
+    ):
+        return
+
+    operator_ids = [
+        operation.get("operator_id")
+        for operation in operations
+    ]
+    if (
+        "OP009" not in operator_ids
+        or not any(
+            operator_id in {"OP011", "OP012"}
+            for operator_id in operator_ids
+        )
+        or "OP013" not in operator_ids
+    ):
+        return
+
+    source_metric_id = specification[
+        "source_metric_id"
+    ]
+    metrics["source_metric_ids"] = [
+        source_metric_id
+    ]
+
+    explicit_numeric_ranking = any(
+        phrase in question
+        for phrase in (
+            "按数值",
+            "数值排名",
+            "数值从高到低",
+            "数值由高到低",
+            "数值降序",
+            "数值从低到高",
+            "数值由低到高",
+            "数值升序",
+        )
+    )
+    numeric_order = (
+        "ascending"
+        if any(
+            phrase in question
+            for phrase in (
+                "数值从低到高",
+                "数值由低到高",
+                "数值升序",
+            )
+        )
+        else "descending"
+    )
+
+    op001_operations = [
+        operation
+        for operation in operations
+        if operation.get("operator_id") == "OP001"
+    ]
+
+    if len(op001_operations) == 1:
+        read_operation = op001_operations[0]
+        read_operation["input_refs"] = [
+            source_metric_id
+        ]
+
+        old_parameters = read_operation.get(
+            "parameters"
+        )
+        old_parameters = (
+            old_parameters
+            if isinstance(old_parameters, dict)
+            else {}
+        )
+
+        institutions = plan.get("institutions")
+        population = (
+            institutions.get(
+                "comparison_population"
+            )
+            if isinstance(institutions, dict)
+            else None
+        )
+        population_ids = (
+            population.get("institution_ids")
+            if isinstance(population, dict)
+            else None
+        )
+
+        institution_ids = old_parameters.get(
+            "institution_ids"
+        )
+        if not (
+            isinstance(institution_ids, list)
+            and institution_ids
+            and all(
+                isinstance(value, str)
+                for value in institution_ids
+            )
+        ):
+            institution_ids = (
+                list(population_ids)
+                if (
+                    isinstance(
+                        population_ids,
+                        list,
+                    )
+                    and population_ids
+                    and all(
+                        isinstance(value, str)
+                        for value
+                        in population_ids
+                    )
+                )
+                else None
+            )
+
+        normalized_parameters = {
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        if institution_ids is not None:
+            normalized_parameters[
+                "institution_ids"
+            ] = institution_ids
+
+        read_operation["parameters"] = (
+            normalized_parameters
+        )
+
+    for operation in operations:
+        operator_id = operation.get(
+            "operator_id"
+        )
+
+        if operator_id == "OP009":
+            operation["parameters"] = {}
+
+        elif operator_id == "OP012":
+            operation["parameters"] = {
+                "metric_id": derived_metric_id,
+                "performance_direction": (
+                    specification[
+                        "performance_direction"
+                    ]
+                ),
+            }
+
+        elif operator_id == "OP011":
+            if explicit_numeric_ranking:
+                operation["parameters"] = {
+                    "order": numeric_order,
+                }
+            else:
+                operation["operator_id"] = (
+                    "OP012"
+                )
+                operation["parameters"] = {
+                    "metric_id": (
+                        derived_metric_id
+                    ),
+                    "performance_direction": (
+                        specification[
+                            "performance_direction"
+                        ]
+                    ),
+                }
+
+        elif operator_id == "OP013":
+            parameters = operation.get(
+                "parameters"
+            )
+            if not isinstance(parameters, dict):
+                continue
+
+            n = parameters.get("n")
+            direction = parameters.get(
+                "direction"
+            )
+            if (
+                isinstance(n, int)
+                and not isinstance(n, bool)
+                and n >= 1
+                and direction
+                in {"top", "bottom"}
+            ):
+                operation["parameters"] = {
+                    "n": n,
+                    "direction": direction,
+                }
+
+    checks = plan.get("checks")
+    if isinstance(checks, list):
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+
+            parameters = check.get("parameters")
+            if not isinstance(parameters, dict):
+                continue
+
+            metric_ids = parameters.get(
+                "metric_ids"
+            )
+            if isinstance(metric_ids, list):
+                parameters["metric_ids"] = [
+                    source_metric_id
+                ]
+
+    output = plan.get("output")
+    if isinstance(output, dict):
+        output["answer_type"] = "ranking"
+        output["result_fields"] = [
+            "institution_id",
+            "metric_value",
+            "rank",
+        ]
+        output["unit"] = specification["unit"]
+        output["tie_policy"] = "preserve_all"
 
 
 def _complete_scalar_extreme_operator(
