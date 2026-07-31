@@ -23,6 +23,8 @@ from app.application.answer_models import (
     MetricRankingFacts,
     RankingItem,
     RankingOverviewFacts,
+    ExtremeMetricItem,
+    ExtremeMetricFacts,
     DirectMetricValueFact,
     DirectMetricValuesFacts,
     CalculationInputFact,
@@ -137,6 +139,11 @@ class DeterministicQueryPlanExecutor:
             )
         if analysis_facts is None:
             analysis_facts = self._ranking_overview_facts(
+                query_plan,
+                context,
+            )
+        if analysis_facts is None:
+            analysis_facts = self._extreme_metric_facts(
                 query_plan,
                 context,
             )
@@ -1226,6 +1233,220 @@ class DeterministicQueryPlanExecutor:
             rankings=rankings,
             selection_mode=selection_mode,
             requested_n=requested_n,
+        )
+
+    @staticmethod
+    def _extreme_metric_facts(
+        query_plan: dict[str, Any],
+        context: dict[str, ExecutionValue],
+    ) -> ExtremeMetricFacts | None:
+        operations = query_plan.get("operations")
+        if (
+            not isinstance(operations, list)
+            or not operations
+        ):
+            return None
+
+        final_operation = operations[-1]
+        if (
+            not isinstance(final_operation, dict)
+            or final_operation.get("operator_id")
+            != "OP014"
+        ):
+            return None
+
+        parameters = final_operation.get(
+            "parameters"
+        )
+        parameters = (
+            parameters
+            if isinstance(parameters, dict)
+            else {}
+        )
+
+        extreme_type = parameters.get("type")
+        if extreme_type not in {"min", "max"}:
+            return None
+
+        output_ref = final_operation.get(
+            "output_ref"
+        )
+        input_refs = final_operation.get(
+            "input_refs"
+        )
+
+        if (
+            not isinstance(output_ref, str)
+            or not isinstance(input_refs, list)
+            or len(input_refs) != 1
+            or not isinstance(input_refs[0], str)
+        ):
+            return None
+
+        result_value = context.get(output_ref)
+        source_value = context.get(input_refs[0])
+
+        if (
+            not isinstance(result_value, ExecutionValue)
+            or result_value.kind != "records"
+            or not isinstance(result_value.data, list)
+            or not isinstance(source_value, ExecutionValue)
+            or source_value.kind != "records"
+            or not isinstance(source_value.data, list)
+        ):
+            return None
+
+        result_records = [
+            item
+            for item in result_value.data
+            if isinstance(item, dict)
+        ]
+        source_records = [
+            item
+            for item in source_value.data
+            if isinstance(item, dict)
+        ]
+
+        if (
+            not result_records
+            or not source_records
+        ):
+            return None
+
+        metric_ids = {
+            item.get("metric_id")
+            for item in result_records
+        }
+        metric_names = {
+            item.get("metric_name")
+            for item in result_records
+        }
+        units = {
+            item.get("unit")
+            for item in result_records
+        }
+        periods = {
+            item.get("date")
+            for item in result_records
+        }
+
+        if (
+            len(metric_ids) != 1
+            or len(metric_names) != 1
+            or len(units) != 1
+            or len(periods) != 1
+        ):
+            return None
+
+        metric_id = next(iter(metric_ids))
+        metric_name = next(iter(metric_names))
+        unit = next(iter(units))
+        period = next(iter(periods))
+
+        if not all(
+            isinstance(value, str) and value
+            for value in (
+                metric_id,
+                metric_name,
+                unit,
+                period,
+            )
+        ):
+            return None
+
+        try:
+            extreme_values = {
+                Decimal(str(item.get("value")))
+                for item in result_records
+                if item.get("value") is not None
+            }
+        except (
+            InvalidOperation,
+            ValueError,
+        ):
+            return None
+
+        if len(extreme_values) != 1:
+            return None
+
+        source_population_ids = {
+            item.get("institution_id")
+            for item in source_records
+            if (
+                item.get("metric_id") == metric_id
+                and item.get("date") == period
+                and isinstance(
+                    item.get("institution_id"),
+                    str,
+                )
+            )
+        }
+
+        if not source_population_ids:
+            return None
+
+        seen_ids: set[str] = set()
+        items: list[ExtremeMetricItem] = []
+
+        for record in result_records:
+            institution_id = record.get(
+                "institution_id"
+            )
+            institution_name = record.get(
+                "institution_name"
+            )
+            value = record.get("value")
+
+            if (
+                not isinstance(institution_id, str)
+                or not isinstance(
+                    institution_name,
+                    str,
+                )
+                or not institution_name
+                or value is None
+                or institution_id
+                not in source_population_ids
+                or institution_id in seen_ids
+            ):
+                return None
+
+            seen_ids.add(institution_id)
+            items.append(
+                ExtremeMetricItem(
+                    institution=InstitutionRef(
+                        institution_id=(
+                            institution_id
+                        ),
+                        institution_name=(
+                            institution_name
+                        ),
+                    ),
+                    value=(
+                        DeterministicQueryPlanExecutor
+                        ._json_scalar(value)
+                    ),
+                )
+            )
+
+        items.sort(
+            key=lambda item: (
+                item.institution.institution_name,
+                item.institution.institution_id
+                or "",
+            )
+        )
+
+        return ExtremeMetricFacts(
+            metric_id=metric_id,
+            metric_name=metric_name,
+            unit=unit,
+            period=period,
+            extreme_type=extreme_type,
+            items=items,
+            population_size=len(
+                source_population_ids
+            ),
         )
 
     @staticmethod

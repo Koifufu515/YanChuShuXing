@@ -15,6 +15,7 @@ from app.application.answer_models import (
     MainMetricsOverviewFacts,
     TrendOverviewFacts,
     RankingOverviewFacts,
+    ExtremeMetricFacts,
     DirectMetricValuesFacts,
     CalculatedMetricFacts,
 )
@@ -47,6 +48,14 @@ class DeterministicAnswerComposer:
             RankingOverviewFacts,
         ):
             return self._compose_ranking(facts)
+
+        if isinstance(
+            facts,
+            ExtremeMetricFacts,
+        ):
+            return self._compose_extreme_metric(
+                facts
+            )
 
         if isinstance(
             facts,
@@ -563,6 +572,103 @@ class DeterministicAnswerComposer:
             return "绩效排名"
 
         return "排名"
+
+    def _compose_extreme_metric(
+        self,
+        facts: ExtremeMetricFacts,
+    ) -> AnswerPayload:
+        if facts.extreme_type == "min":
+            extreme_text = "最低"
+        elif facts.extreme_type == "max":
+            extreme_text = "最高"
+        else:
+            raise ValueError(
+                "极值类型必须为 min 或 max。"
+            )
+
+        if not facts.items:
+            raise ValueError(
+                "极值事实至少需要一家机构。"
+            )
+
+        value_text = self._display_number(
+            facts.items[0].value
+        )
+        institution_names = [
+            item.institution.institution_name
+            for item in facts.items
+        ]
+
+        if len(facts.items) == 1:
+            institution_text = (
+                institution_names[0]
+            )
+            headline = (
+                f"{institution_text}"
+                f"{facts.metric_name}{extreme_text}，"
+                f"为{value_text}{facts.unit}"
+            )
+            summary = (
+                f"截至 "
+                f"{self._display_period(facts.period)}，"
+                f"在全省{facts.population_size}家"
+                f"农商行中，{institution_text}的"
+                f"{facts.metric_name}{extreme_text}，"
+                f"为{value_text}{facts.unit}。"
+            )
+        else:
+            institution_text = "、".join(
+                institution_names
+            )
+            headline = (
+                f"{facts.metric_name}{extreme_text}值"
+                f"由{len(facts.items)}家机构"
+                f"并列取得"
+            )
+            summary = (
+                f"截至 "
+                f"{self._display_period(facts.period)}，"
+                f"在全省{facts.population_size}家"
+                f"农商行中，{institution_text}的"
+                f"{facts.metric_name}并列"
+                f"{extreme_text}，均为"
+                f"{value_text}{facts.unit}。"
+            )
+
+        return AnswerPayload(
+            answer_type=facts.answer_type,
+            headline=headline,
+            summary=summary,
+            key_metrics=[
+                KeyMetric(
+                    label=f"{facts.metric_name}"
+                    f"{extreme_text}值",
+                    value=facts.items[0].value,
+                    unit=facts.unit,
+                )
+            ],
+            table=AnswerTable(
+                columns=[
+                    "机构",
+                    facts.metric_name,
+                    "单位",
+                    "极值类型",
+                ],
+                rows=[
+                    [
+                        item.institution
+                        .institution_name,
+                        self._display_number(
+                            item.value
+                        ),
+                        facts.unit,
+                        extreme_text,
+                    ]
+                    for item in facts.items
+                ],
+            ),
+            chart_spec=None,
+        )
 
     def _compose_calculated_metric(
         self,

@@ -101,6 +101,24 @@ class RankingOverviewFacts:
 
 
 @dataclass(frozen=True)
+class ExtremeMetricItem:
+    institution: InstitutionRef
+    value: JsonScalar
+
+
+@dataclass(frozen=True)
+class ExtremeMetricFacts:
+    metric_id: str
+    metric_name: str
+    unit: str
+    period: str
+    extreme_type: str
+    items: list[ExtremeMetricItem]
+    population_size: int
+    answer_type: str = "extreme_value"
+
+
+@dataclass(frozen=True)
 class DirectMetricValueFact:
     metric_id: str
     metric_name: str
@@ -144,6 +162,7 @@ AnalysisFacts = (
     | MainMetricsOverviewFacts
     | TrendOverviewFacts
     | RankingOverviewFacts
+    | ExtremeMetricFacts
     | DirectMetricValuesFacts
     | CalculatedMetricFacts
 )
