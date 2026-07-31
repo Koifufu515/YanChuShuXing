@@ -18,6 +18,7 @@ from app.application.answer_models import (
     ExtremeMetricFacts,
     DirectMetricValuesFacts,
     CalculatedMetricFacts,
+    ReconciliationFacts,
 )
 
 
@@ -75,6 +76,14 @@ class DeterministicAnswerComposer:
 
         if isinstance(
             facts,
+            ReconciliationFacts,
+        ):
+            return self._compose_reconciliation(
+                facts
+            )
+
+        if isinstance(
+            facts,
             BenchmarkComparisonFacts,
         ):
             return self._compose_benchmark(facts)
@@ -82,6 +91,124 @@ class DeterministicAnswerComposer:
         raise TypeError(
             f"暂不支持的分析事实类型："
             f"{type(facts).__name__}"
+        )
+
+    def _compose_reconciliation(
+        self,
+        facts: ReconciliationFacts,
+    ) -> AnswerPayload:
+        if not facts.components:
+            raise ValueError(
+                "对账事实至少需要一个分项。"
+            )
+
+        status_text = (
+            "一致"
+            if facts.is_equal
+            else "不一致"
+        )
+
+        component_expression = (
+            " + ".join(
+                (
+                    f"{component.metric_name}"
+                    f"{self._display_number(component.value)}"
+                    f"{component.unit}"
+                )
+                for component
+                in facts.components
+            )
+        )
+
+        summary = (
+            f"截至 "
+            f"{self._display_period(facts.period)}，"
+            f"{facts.subject.institution_name}的"
+            f"{component_expression}"
+            f" = "
+            f"{self._display_number(facts.component_sum)}"
+            f"{facts.unit}；"
+            f"{facts.total_metric_name}为"
+            f"{self._display_number(facts.total_value)}"
+            f"{facts.unit}；"
+            f"总量与分项合计{status_text}，"
+            f"差额为"
+            f"{self._display_number(facts.difference)}"
+            f"{facts.unit}。"
+        )
+
+        table_rows = [
+            [
+                component.metric_name,
+                self._display_number(
+                    component.value
+                ),
+                component.unit,
+            ]
+            for component
+            in facts.components
+        ]
+
+        table_rows.extend(
+            [
+                [
+                    "分项合计",
+                    self._display_number(
+                        facts.component_sum
+                    ),
+                    facts.unit,
+                ],
+                [
+                    facts.total_metric_name,
+                    self._display_number(
+                        facts.total_value
+                    ),
+                    facts.unit,
+                ],
+                [
+                    "差额",
+                    self._display_number(
+                        facts.difference
+                    ),
+                    facts.unit,
+                ],
+            ]
+        )
+
+        return AnswerPayload(
+            answer_type=facts.answer_type,
+            headline=(
+                f"{facts.subject.institution_name}"
+                f"{facts.total_metric_name}"
+                f"对账{status_text}"
+            ),
+            summary=summary,
+            key_metrics=[
+                KeyMetric(
+                    label="分项合计",
+                    value=facts.component_sum,
+                    unit=facts.unit,
+                ),
+                KeyMetric(
+                    label=facts.total_metric_name,
+                    value=facts.total_value,
+                    unit=facts.unit,
+                ),
+                KeyMetric(
+                    label="差额",
+                    value=facts.difference,
+                    unit=facts.unit,
+                ),
+            ],
+            table=AnswerTable(
+                columns=[
+                    "项目",
+                    "数值",
+                    "单位",
+                ],
+                rows=table_rows,
+            ),
+            chart_spec=None,
         )
 
     def _compose_main_metrics(

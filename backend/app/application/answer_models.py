@@ -160,6 +160,29 @@ class CalculatedMetricFacts:
     answer_type: str = "calculated_metric"
 
 
+@dataclass(frozen=True)
+class ReconciliationComponentFact:
+    metric_name: str
+    value: JsonScalar
+    unit: str
+
+
+@dataclass(frozen=True)
+class ReconciliationFacts:
+    subject: InstitutionRef
+    period: str
+    total_metric_name: str
+    total_value: JsonScalar
+    components: list[
+        ReconciliationComponentFact
+    ]
+    component_sum: JsonScalar
+    difference: JsonScalar
+    unit: str
+    is_equal: bool
+    answer_type: str = "reconciliation"
+
+
 AnalysisFacts = (
     BenchmarkComparisonFacts
     | MainMetricsOverviewFacts
@@ -168,6 +191,7 @@ AnalysisFacts = (
     | ExtremeMetricFacts
     | DirectMetricValuesFacts
     | CalculatedMetricFacts
+    | ReconciliationFacts
 )
 
 

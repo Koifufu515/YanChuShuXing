@@ -29,6 +29,8 @@ from app.application.answer_models import (
     DirectMetricValuesFacts,
     CalculationInputFact,
     CalculatedMetricFacts,
+    ReconciliationComponentFact,
+    ReconciliationFacts,
 )
 from app.application.models import JsonScalar, QueryPlanExecutionResult
 from app.ports.database_executor import DatabaseExecutor
@@ -172,6 +174,11 @@ class DeterministicQueryPlanExecutor:
             analysis_facts = self._benchmark_comparison_facts(
                 query_plan,
                 final_value,
+            )
+        if analysis_facts is None:
+            analysis_facts = self._reconciliation_facts(
+                query_plan,
+                context,
             )
         if analysis_facts is None:
             analysis_facts = self._calculated_metric_facts(
@@ -2081,6 +2088,308 @@ class DeterministicQueryPlanExecutor:
         if isinstance(value, (str, int, float, bool)) or value is None:
             return value
         return str(value)
+
+    @staticmethod
+    def _reconciliation_facts(
+        query_plan: dict[str, Any],
+        context: dict[str, ExecutionValue],
+    ) -> ReconciliationFacts | None:
+        operations = query_plan.get(
+            "operations"
+        )
+
+        if (
+            not isinstance(operations, list)
+            or not operations
+        ):
+            return None
+
+        final_operation = operations[-1]
+
+        if (
+            not isinstance(final_operation, dict)
+            or final_operation.get(
+                "operator_id"
+            )
+            != "OP005"
+        ):
+            return None
+
+        final_ref = final_operation.get(
+            "output_ref"
+        )
+        input_refs = final_operation.get(
+            "input_refs"
+        )
+
+        if (
+            not isinstance(final_ref, str)
+            or not isinstance(input_refs, list)
+            or len(input_refs) < 2
+            or not all(
+                isinstance(ref, str)
+                for ref in input_refs
+            )
+        ):
+            return None
+
+        final_value = context.get(final_ref)
+
+        if (
+            not isinstance(
+                final_value,
+                ExecutionValue,
+            )
+            or final_value.kind
+            != "reconciliation"
+            or not isinstance(
+                final_value.data,
+                dict,
+            )
+            or not isinstance(
+                final_value.unit,
+                str,
+            )
+            or not final_value.unit
+        ):
+            return None
+
+        data = final_value.data
+
+        for field_name in (
+            "total_value",
+            "component_sum",
+            "difference",
+        ):
+            if data.get(field_name) is None:
+                return None
+
+        is_equal = data.get("is_equal")
+
+        if not isinstance(is_equal, bool):
+            return None
+
+        total_input = context.get(
+            input_refs[0]
+        )
+
+        if (
+            not isinstance(
+                total_input,
+                ExecutionValue,
+            )
+            or total_input.kind != "records"
+            or not isinstance(
+                total_input.data,
+                list,
+            )
+            or len(total_input.data) != 1
+            or not isinstance(
+                total_input.data[0],
+                dict,
+            )
+        ):
+            return None
+
+        total_record = total_input.data[0]
+
+        required_strings = (
+            "institution_id",
+            "institution_name",
+            "date",
+            "metric_name",
+            "unit",
+        )
+
+        if any(
+            not isinstance(
+                total_record.get(field_name),
+                str,
+            )
+            or not total_record[field_name]
+            for field_name
+            in required_strings
+        ):
+            return None
+
+        if total_record.get("value") is None:
+            return None
+
+        if (
+            total_record["unit"]
+            != final_value.unit
+        ):
+            return None
+
+        total_metric_name = (
+            data.get("total_label")
+            or total_record["metric_name"]
+        )
+
+        if (
+            not isinstance(
+                total_metric_name,
+                str,
+            )
+            or not total_metric_name
+        ):
+            return None
+
+        raw_components = data.get(
+            "component_details"
+        )
+
+        if (
+            not isinstance(
+                raw_components,
+                list,
+            )
+            or not raw_components
+        ):
+            return None
+
+        components: list[
+            ReconciliationComponentFact
+        ] = []
+        component_decimals: list[
+            Decimal
+        ] = []
+
+        for raw_component in raw_components:
+            if not isinstance(
+                raw_component,
+                dict,
+            ):
+                return None
+
+            metric_name = raw_component.get(
+                "metric_name"
+            )
+            value = raw_component.get("value")
+            unit = raw_component.get("unit")
+
+            if (
+                not isinstance(
+                    metric_name,
+                    str,
+                )
+                or not metric_name
+                or value is None
+                or not isinstance(unit, str)
+                or not unit
+                or unit != final_value.unit
+            ):
+                return None
+
+            try:
+                component_decimal = Decimal(
+                    str(value)
+                )
+            except (
+                InvalidOperation,
+                ValueError,
+            ):
+                return None
+
+            component_decimals.append(
+                component_decimal
+            )
+            components.append(
+                ReconciliationComponentFact(
+                    metric_name=metric_name,
+                    value=(
+                        DeterministicQueryPlanExecutor
+                        ._json_scalar(value)
+                    ),
+                    unit=unit,
+                )
+            )
+
+        try:
+            total_decimal = Decimal(
+                str(data["total_value"])
+            )
+            source_total_decimal = Decimal(
+                str(total_record["value"])
+            )
+            component_sum_decimal = Decimal(
+                str(data["component_sum"])
+            )
+            difference_decimal = Decimal(
+                str(data["difference"])
+            )
+        except (
+            InvalidOperation,
+            ValueError,
+        ):
+            return None
+
+        if total_decimal != source_total_decimal:
+            return None
+
+        if (
+            sum(
+                component_decimals,
+                Decimal(0),
+            )
+            != component_sum_decimal
+        ):
+            return None
+
+        if (
+            total_decimal
+            - component_sum_decimal
+            != difference_decimal
+        ):
+            return None
+
+        if (
+            is_equal
+            != (difference_decimal == 0)
+        ):
+            return None
+
+        return ReconciliationFacts(
+            subject=InstitutionRef(
+                institution_id=str(
+                    total_record[
+                        "institution_id"
+                    ]
+                ),
+                institution_name=str(
+                    total_record[
+                        "institution_name"
+                    ]
+                ),
+            ),
+            period=str(
+                total_record["date"]
+            ),
+            total_metric_name=(
+                total_metric_name
+            ),
+            total_value=(
+                DeterministicQueryPlanExecutor
+                ._json_scalar(
+                    data["total_value"]
+                )
+            ),
+            components=components,
+            component_sum=(
+                DeterministicQueryPlanExecutor
+                ._json_scalar(
+                    data["component_sum"]
+                )
+            ),
+            difference=(
+                DeterministicQueryPlanExecutor
+                ._json_scalar(
+                    data["difference"]
+                )
+            ),
+            unit=final_value.unit,
+            is_equal=is_equal,
+        )
 
     @staticmethod
     def _calculated_metric_facts(
