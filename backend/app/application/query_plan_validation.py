@@ -1482,9 +1482,15 @@ def validate_business_rules(
                     }
                 )
 
+    asks_month_and_year_comparison = (
+        ("环比" in question or "较上月" in question)
+        and ("同比" in question or "较去年同期" in question)
+    )
+
     asks_absolute_change = (
         re.search(r"(变动|变化)(了)?多少|增加多少|减少多少", question)
         is not None
+        and not asks_month_and_year_comparison
         and "变化情况" not in question
         and not any(
             phrase in question
@@ -1892,10 +1898,6 @@ def validate_business_rules(
                 }
             )
 
-    asks_month_and_year_comparison = (
-        ("环比" in question or "较上月" in question)
-        and ("同比" in question or "较去年同期" in question)
-    )
     if asks_month_and_year_comparison:
         if operator_ids.count("OP021") < 2:
             errors.append(

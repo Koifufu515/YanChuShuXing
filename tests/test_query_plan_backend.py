@@ -2722,6 +2722,24 @@ class RemainingFailureRegressionTest(unittest.TestCase):
             errors,
         )
 
+        plan["operations"][-1]["input_refs"] = [
+            "current_value",
+            "mom_change",
+            "yoy_change",
+        ]
+        plan["output"]["result_fields"] = [
+            "current_value",
+            "mom_change",
+            "yoy_change",
+        ]
+        errors = validate_business_rules(
+            plan,
+            self.context,
+            "分析江苏省A市农商银行2026-04-30各项存款余额，环比和同比分别变化了多少，同时给出当前值。",
+        )
+
+        self.assertEqual(errors, [])
+
     def test_mixed_current_value_and_growth_results_are_all_rendered(self):
         data = {
             ("ORG001", "ZB001", "2026-04-30"): (
