@@ -252,6 +252,134 @@ class RankingAnswerComposerTest(
             "绩效排名（低值优先）",
         )
 
+    def test_numeric_ascending_target_rank_is_explicit(
+        self,
+    ) -> None:
+        facts = RankingOverviewFacts(
+            period="2025-12-31",
+            selection_mode="target",
+            rankings=[
+                MetricRankingFacts(
+                    metric=MetricRef(
+                        metric_id="ZB022",
+                        metric_name="存贷比",
+                        unit="%",
+                        performance_direction=(
+                            "not_applicable"
+                        ),
+                    ),
+                    population_size=13,
+                    ranking_method="numeric",
+                    ranking_order="ascending",
+                    items=[
+                        RankingItem(
+                            institution=InstitutionRef(
+                                institution_id="ORG013",
+                                institution_name=(
+                                    "江苏省M市农商行"
+                                ),
+                            ),
+                            value=51.24,
+                            rank=1,
+                        )
+                    ],
+                )
+            ],
+        )
+
+        answer = (
+            DeterministicAnswerComposer()
+            .compose(
+                question=(
+                    "按存贷比数值从低到高排名，"
+                    "江苏省M市农商行排第几？"
+                ),
+                query_plan={},
+                facts=facts,
+            )
+        )
+
+        self.assertIn(
+            "数值排名第1名（按数值从低到高）",
+            answer.headline,
+        )
+        self.assertIn(
+            "数值排名第1名（按数值从低到高）",
+            answer.summary,
+        )
+
+        self.assertIsNotNone(answer.table)
+        assert answer.table is not None
+
+        self.assertEqual(
+            answer.table.rows[0][4],
+            "数值排名（从低到高）",
+        )
+
+    def test_numeric_descending_target_rank_is_explicit(
+        self,
+    ) -> None:
+        facts = RankingOverviewFacts(
+            period="2025-12-31",
+            selection_mode="target",
+            rankings=[
+                MetricRankingFacts(
+                    metric=MetricRef(
+                        metric_id="ZB022",
+                        metric_name="存贷比",
+                        unit="%",
+                        performance_direction=(
+                            "not_applicable"
+                        ),
+                    ),
+                    population_size=13,
+                    ranking_method="numeric",
+                    ranking_order="descending",
+                    items=[
+                        RankingItem(
+                            institution=InstitutionRef(
+                                institution_id="ORG003",
+                                institution_name=(
+                                    "江苏省C市农商行"
+                                ),
+                            ),
+                            value=72.31,
+                            rank=2,
+                        )
+                    ],
+                )
+            ],
+        )
+
+        answer = (
+            DeterministicAnswerComposer()
+            .compose(
+                question=(
+                    "按存贷比数值从高到低排名，"
+                    "江苏省C市农商行排第几？"
+                ),
+                query_plan={},
+                facts=facts,
+            )
+        )
+
+        self.assertIn(
+            "数值排名第2名（按数值从高到低）",
+            answer.headline,
+        )
+        self.assertIn(
+            "数值排名第2名（按数值从高到低）",
+            answer.summary,
+        )
+
+        self.assertIsNotNone(answer.table)
+        assert answer.table is not None
+
+        self.assertEqual(
+            answer.table.rows[0][4],
+            "数值排名（从高到低）",
+        )
+
     def test_top_n_boundary_tie_uses_value_bar_chart(
         self,
     ) -> None:

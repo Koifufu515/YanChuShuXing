@@ -89,6 +89,7 @@ class MetricRankingFacts:
     items: list[RankingItem]
     population_size: int
     ranking_method: str
+    ranking_order: str | None = None
 
 
 @dataclass(frozen=True)

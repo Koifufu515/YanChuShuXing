@@ -271,6 +271,7 @@ class DeterministicAnswerComposer:
                         item.rank,
                         ranking.ranking_method,
                         ranking.metric.performance_direction,
+                        ranking.ranking_order,
                     )
                 )
                 for ranking in facts.rankings
@@ -293,6 +294,7 @@ class DeterministicAnswerComposer:
                         item.rank,
                         ranking.ranking_method,
                         ranking.metric.performance_direction,
+                        ranking.ranking_order,
                     )
                 )
             else:
@@ -437,6 +439,7 @@ class DeterministicAnswerComposer:
                 self._ranking_rule_text(
                     ranking.ranking_method,
                     ranking.metric.performance_direction,
+                    ranking.ranking_order,
                 )
             )
 
@@ -521,8 +524,21 @@ class DeterministicAnswerComposer:
         rank: int,
         ranking_method: str,
         performance_direction: str,
+        ranking_order: str | None = None,
     ) -> str:
         if ranking_method == "numeric":
+            if ranking_order == "ascending":
+                return (
+                    f"数值排名第{rank}名"
+                    "（按数值从低到高）"
+                )
+
+            if ranking_order == "descending":
+                return (
+                    f"数值排名第{rank}名"
+                    "（按数值从高到低）"
+                )
+
             return f"数值排名第{rank}名"
 
         if ranking_method == "performance":
@@ -552,8 +568,19 @@ class DeterministicAnswerComposer:
     def _ranking_rule_text(
         ranking_method: str,
         performance_direction: str,
+        ranking_order: str | None = None,
     ) -> str:
         if ranking_method == "numeric":
+            if ranking_order == "ascending":
+                return (
+                    "数值排名（从低到高）"
+                )
+
+            if ranking_order == "descending":
+                return (
+                    "数值排名（从高到低）"
+                )
+
             return "数值排名"
 
         if ranking_method == "performance":

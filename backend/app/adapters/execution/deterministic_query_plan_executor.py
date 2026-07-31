@@ -869,6 +869,7 @@ class DeterministicQueryPlanExecutor:
                 }:
                     return None
                 ranking_method = "performance"
+                ranking_order = None
             elif rank_operator == "OP011":
                 order = rank_parameters.get(
                     "order"
@@ -882,6 +883,7 @@ class DeterministicQueryPlanExecutor:
                     "not_applicable"
                 )
                 ranking_method = "numeric"
+                ranking_order = order
             else:
                 return None
 
@@ -1016,6 +1018,9 @@ class DeterministicQueryPlanExecutor:
                         "ranking_method": (
                             ranking_method
                         ),
+                        "ranking_order": (
+                            ranking_order
+                        ),
                         "population_size": len(
                             population_ids
                         ),
@@ -1032,6 +1037,8 @@ class DeterministicQueryPlanExecutor:
                     != performance_direction
                     or group["ranking_method"]
                     != ranking_method
+                    or group["ranking_order"]
+                    != ranking_order
                     or group["population_size"]
                     != len(population_ids)
                 ):
@@ -1221,6 +1228,9 @@ class DeterministicQueryPlanExecutor:
                     ],
                     ranking_method=group[
                         "ranking_method"
+                    ],
+                    ranking_order=group[
+                        "ranking_order"
                     ],
                 )
             )

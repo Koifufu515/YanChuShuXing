@@ -277,6 +277,110 @@ class RankingFactExtractionTest(
             [13, 13, 13],
         )
 
+    def test_preserves_numeric_ranking_order(
+        self,
+    ) -> None:
+        ranked = ranked_records(
+            metric_id="ZB022",
+            metric_name="存贷比",
+            unit="%",
+            target_rank=1,
+            lower_is_better=True,
+        )
+
+        plan = {
+            "institutions": {
+                "targets": [
+                    {
+                        "institution_id": "ORG013",
+                        "institution_name": (
+                            "江苏省M市农商行"
+                        ),
+                    }
+                ],
+                "comparison_population": {
+                    "type": "province_all",
+                    "institution_ids": [],
+                },
+            },
+            "metrics": {
+                "requested_metric_ids": [
+                    "ZB022"
+                ],
+                "source_metric_ids": [
+                    "ZB022"
+                ],
+                "concept_ids": [],
+            },
+            "operations": [
+                {
+                    "step": 1,
+                    "operator_id": "OP011",
+                    "input_refs": [
+                        "ratio_raw"
+                    ],
+                    "output_ref": (
+                        "ratio_rank"
+                    ),
+                    "parameters": {
+                        "order": "ascending"
+                    },
+                },
+                {
+                    "step": 2,
+                    "operator_id": "OP013",
+                    "input_refs": [
+                        "ratio_rank"
+                    ],
+                    "output_ref": (
+                        "ratio_all"
+                    ),
+                    "parameters": {
+                        "n": 13,
+                        "direction": "top",
+                    },
+                },
+            ],
+        }
+
+        context = {
+            "ratio_rank": ExecutionValue(
+                kind="records",
+                data=ranked,
+                unit="%",
+            ),
+            "ratio_all": ExecutionValue(
+                kind="records",
+                data=ranked,
+                unit="%",
+            ),
+        }
+
+        facts = (
+            DeterministicQueryPlanExecutor
+            ._ranking_overview_facts(
+                plan,
+                context,
+            )
+        )
+
+        self.assertIsInstance(
+            facts,
+            RankingOverviewFacts,
+        )
+        assert facts is not None
+
+        self.assertEqual(
+            facts.rankings[0]
+            .ranking_method,
+            "numeric",
+        )
+        self.assertEqual(
+            facts.rankings[0]
+            .ranking_order,
+            "ascending",
+        )
+
     def test_extracts_top_n_with_boundary_tie(
         self,
     ) -> None:
